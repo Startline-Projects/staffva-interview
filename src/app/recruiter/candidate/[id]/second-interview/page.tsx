@@ -40,6 +40,8 @@ interface CandidateData {
   display_name: string;
   country: string;
   role_category: string;
+  voice_recording_1_url: string | null;
+  voice_recording_2_url: string | null;
 }
 
 interface ScoreResult {
@@ -54,7 +56,6 @@ interface ScoreResult {
   recommendation_reason: string;
   feedback: string;
   ai_notes: string;
-  speaking_level: string;
 }
 
 export default function SecondInterviewPage() {
@@ -68,13 +69,17 @@ export default function SecondInterviewPage() {
   const [error, setError] = useState("");
 
   // Form state
-  const [speakingLevel, setSpeakingLevel] = useState("");
   const [transcript, setTranscript] = useState("");
   const [scoring, setScoring] = useState(false);
 
   // Results state
   const [results, setResults] = useState<ScoreResult | null>(null);
   const [firstInterview, setFirstInterview] = useState<Record<string, number> | null>(null);
+
+  // Speaking level state (post-scoring)
+  const [speakingLevel, setSpeakingLevel] = useState("");
+  const [savingSpeaking, setSavingSpeaking] = useState(false);
+  const [speakingConfirmed, setSpeakingConfirmed] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -110,7 +115,6 @@ export default function SecondInterviewPage() {
           recommendation_reason: interviewData.combined_recommendation_reason,
           feedback: interviewData.second_interview_feedback,
           ai_notes: interviewData.second_interview_ai_notes,
-          speaking_level: interviewData.speaking_level,
         });
         setFirstInterview({
           overall_score: interviewData.overall_score,
@@ -120,11 +124,15 @@ export default function SecondInterviewPage() {
           experience_depth_score: interviewData.experience_depth_score,
           professionalism_score: interviewData.professionalism_score,
         });
+        if (interviewData.speaking_level) {
+          setSpeakingLevel(interviewData.speaking_level);
+          setSpeakingConfirmed(true);
+        }
       }
 
       const { data: candidateData } = await supabase
         .from("candidates")
-        .select("display_name, country, role_category")
+        .select("display_name, country, role_category, voice_recording_1_url, voice_recording_2_url")
         .eq("id", interviewData.candidate_id)
         .single();
 
@@ -138,10 +146,6 @@ export default function SecondInterviewPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
 
-    if (!speakingLevel) {
-      setError("Please select a speaking level");
-      return;
-    }
     if (!transcript.trim()) {
       setError("Please paste the interview transcript");
       return;
@@ -156,7 +160,6 @@ export default function SecondInterviewPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           interviewId,
-          speakingLevel,
           transcript: transcript.trim(),
         }),
       });
@@ -175,6 +178,37 @@ export default function SecondInterviewPage() {
       setError("Network error — try again");
     }
     setScoring(false);
+  }
+
+  async function handleConfirmSpeakingLevel() {
+    if (!speakingLevel) {
+      setError("Please select a speaking level");
+      return;
+    }
+
+    setError("");
+    setSavingSpeaking(true);
+
+    try {
+      const res = await fetch("/api/recruiter/confirm-speaking-level", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interviewId, speakingLevel }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || "Failed to save speaking level");
+        setSavingSpeaking(false);
+        return;
+      }
+
+      setSpeakingConfirmed(true);
+    } catch {
+      setError("Network error — try again");
+    }
+    setSavingSpeaking(false);
   }
 
   if (loading) {
@@ -206,7 +240,7 @@ export default function SecondInterviewPage() {
     reject: "bg-red-900 text-red-300 border-red-700",
   };
 
-  // ===== RESULTS VIEW =====
+  // ===== RESULTS VIEW (after scoring) =====
   if (results && firstInterview) {
     const dimensions = [
       { label: "Technical Knowledge", first: firstInterview.technical_knowledge_score, second: results.second_technical },
@@ -286,20 +320,102 @@ export default function SecondInterviewPage() {
             <p className="text-gray-400 text-sm leading-relaxed whitespace-pre-line">{results.ai_notes}</p>
           </div>
 
-          {/* Speaking Level */}
-          <div className="bg-gray-900 rounded-xl p-6 mb-6">
-            <h3 className="font-semibold mb-2">Speaking Level</h3>
-            <span className="inline-block px-4 py-1 rounded-full bg-blue-900 text-blue-300 font-medium">
-              {results.speaking_level}
-            </span>
+          {/* Speaking Level Assignment — shown AFTER scoring */}
+          <div className="bg-gray-900 rounded-xl p-6 mb-6 border-2 border-amber-700">
+            <h2 className="font-semibold mb-4">Speaking Level Assignment</h2>
+
+            {/* Audio players for original recordings */}
+            {(candidate?.voice_recording_1_url || candidate?.voice_recording_2_url) && (
+              <div className="mb-6 space-y-4">
+                <p className="text-gray-400 text-sm">
+                  Listen to the original recordings and review the second interview above, then assign the speaking level.
+                </p>
+                {candidate?.voice_recording_1_url && (
+                  <div>
+                    <p className="text-gray-500 text-xs mb-1">Oral Reading</p>
+                    <audio controls className="w-full" preload="none">
+                      <source src={candidate.voice_recording_1_url} />
+                    </audio>
+                  </div>
+                )}
+                {candidate?.voice_recording_2_url && (
+                  <div>
+                    <p className="text-gray-500 text-xs mb-1">Self-Introduction</p>
+                    <audio controls className="w-full" preload="none">
+                      <source src={candidate.voice_recording_2_url} />
+                    </audio>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {speakingConfirmed ? (
+              <div>
+                <span className="inline-block px-4 py-2 rounded-full bg-blue-900 text-blue-300 font-medium text-lg">
+                  {speakingLevel}
+                </span>
+                <p className="text-green-400 text-sm mt-3">
+                  Speaking level saved. Sam has been notified.
+                </p>
+              </div>
+            ) : (
+              <div>
+                <select
+                  value={speakingLevel}
+                  onChange={(e) => setSpeakingLevel(e.target.value)}
+                  className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-amber-600 mb-4"
+                >
+                  <option value="">Select speaking level...</option>
+                  <option value="Fluent">Fluent</option>
+                  <option value="Proficient">Proficient</option>
+                  <option value="Conversational">Conversational</option>
+                  <option value="Basic">Basic</option>
+                </select>
+
+                <div className="space-y-3 text-sm mb-6">
+                  <div className="bg-gray-800 rounded-lg p-3">
+                    <p className="font-medium text-green-400">Fluent</p>
+                    <p className="text-gray-500">No translation pauses. Professional vocabulary. Could be placed on a US client call day one.</p>
+                  </div>
+                  <div className="bg-gray-800 rounded-lg p-3">
+                    <p className="font-medium text-blue-400">Proficient</p>
+                    <p className="text-gray-500">Occasional word-search pauses. Accent present but no comprehension difficulty. Fully professional.</p>
+                  </div>
+                  <div className="bg-gray-800 rounded-lg p-3">
+                    <p className="font-medium text-amber-400">Conversational</p>
+                    <p className="text-gray-500">Noticeable grammar errors. Active listening required. Back-office roles only.</p>
+                  </div>
+                  <div className="bg-gray-800 rounded-lg p-3">
+                    <p className="font-medium text-red-400">Basic</p>
+                    <p className="text-gray-500">Frequent comprehension gaps. Do not advance regardless of score.</p>
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="bg-red-900/30 border border-red-800 rounded-lg p-4 mb-4">
+                    <p className="text-red-400 text-sm">{error}</p>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleConfirmSpeakingLevel}
+                  disabled={savingSpeaking || !speakingLevel}
+                  className="w-full py-3 bg-amber-600 hover:bg-amber-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-xl font-semibold transition-colors"
+                >
+                  {savingSpeaking ? "Saving..." : "Confirm Speaking Level"}
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Footer note */}
-          <div className="text-center py-6">
-            <p className="text-gray-600 text-sm">
-              Sam has been notified and will review within 48 hours.
-            </p>
-          </div>
+          {speakingConfirmed && (
+            <div className="text-center py-6">
+              <p className="text-gray-600 text-sm">
+                Sam has been notified and will review within 48 hours.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -385,43 +501,7 @@ export default function SecondInterviewPage() {
         </div>
 
         <form onSubmit={handleSubmit}>
-          {/* SECTION B — Speaking Level */}
-          <div className="bg-gray-900 rounded-xl p-6 mb-6">
-            <h2 className="font-semibold mb-4">Speaking Level Assignment</h2>
-            <select
-              value={speakingLevel}
-              onChange={(e) => setSpeakingLevel(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:outline-none focus:border-amber-600 mb-4"
-              required
-            >
-              <option value="">Select speaking level...</option>
-              <option value="Fluent">Fluent</option>
-              <option value="Proficient">Proficient</option>
-              <option value="Conversational">Conversational</option>
-              <option value="Basic">Basic</option>
-            </select>
-
-            <div className="space-y-3 text-sm">
-              <div className="bg-gray-800 rounded-lg p-3">
-                <p className="font-medium text-green-400">Fluent</p>
-                <p className="text-gray-500">No translation pauses. Professional vocabulary. Could be placed on a US client call day one.</p>
-              </div>
-              <div className="bg-gray-800 rounded-lg p-3">
-                <p className="font-medium text-blue-400">Proficient</p>
-                <p className="text-gray-500">Occasional word-search pauses. Accent present but no comprehension difficulty. Fully professional.</p>
-              </div>
-              <div className="bg-gray-800 rounded-lg p-3">
-                <p className="font-medium text-amber-400">Conversational</p>
-                <p className="text-gray-500">Noticeable grammar errors. Active listening required. Back-office roles only.</p>
-              </div>
-              <div className="bg-gray-800 rounded-lg p-3">
-                <p className="font-medium text-red-400">Basic</p>
-                <p className="text-gray-500">Frequent comprehension gaps. Do not advance regardless of score.</p>
-              </div>
-            </div>
-          </div>
-
-          {/* SECTION C — Transcript Upload */}
+          {/* SECTION B — Transcript Upload */}
           <div className="bg-gray-900 rounded-xl p-6 mb-6">
             <h2 className="font-semibold mb-2">Transcript Upload</h2>
             <p className="text-gray-500 text-sm mb-4">
@@ -435,6 +515,9 @@ export default function SecondInterviewPage() {
               placeholder="Include everything — questions asked, candidate answers, your personal observations, and any flags you noted during the call."
               required
             />
+            <p className="text-gray-600 text-xs mt-2">
+              Include everything — questions asked, candidate answers, your personal observations, and any flags you noted during the call.
+            </p>
           </div>
 
           {/* Error display */}
@@ -444,7 +527,7 @@ export default function SecondInterviewPage() {
             </div>
           )}
 
-          {/* SECTION D — Submit */}
+          {/* Submit */}
           <button
             type="submit"
             disabled={scoring}

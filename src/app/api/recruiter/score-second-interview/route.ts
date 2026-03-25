@@ -5,11 +5,11 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { interviewId, speakingLevel, transcript } = body;
+    const { interviewId, transcript } = body;
 
-    if (!interviewId || !speakingLevel || !transcript) {
+    if (!interviewId || !transcript) {
       return NextResponse.json(
-        { error: "Missing required fields: interviewId, speakingLevel, transcript" },
+        { error: "Missing required fields: interviewId, transcript" },
         { status: 400 }
       );
     }
@@ -72,10 +72,10 @@ export async function POST(request: NextRequest) {
       .eq("id", interview.candidate_id)
       .single();
 
-    // Call Claude to score the second interview
-    const scores = await scoreSecondInterview(interview, candidate, speakingLevel, transcript);
+    // Call Claude to score the second interview (no speaking level yet)
+    const scores = await scoreSecondInterview(interview, candidate, transcript);
 
-    // Save results to ai_interviews
+    // Save results to ai_interviews (no speaking_level yet, no Sam email yet)
     const { error: updateError } = await supabase
       .from("ai_interviews")
       .update({
@@ -92,7 +92,6 @@ export async function POST(request: NextRequest) {
         combined_score: scores.combined_score,
         combined_recommendation: scores.recommendation,
         combined_recommendation_reason: scores.recommendation_reason,
-        speaking_level: speakingLevel,
         second_interview_status: "completed",
         second_interview_recruiter_email: recruiterEmail,
         second_interview_recruiter_name: recruiterName,
@@ -101,23 +100,6 @@ export async function POST(request: NextRequest) {
 
     if (updateError) {
       return NextResponse.json({ error: "Failed to save scores: " + updateError.message }, { status: 500 });
-    }
-
-    // Update speaking_level on candidates table (syncs to staffva.com)
-    try {
-      await supabase
-        .from("candidates")
-        .update({ speaking_level: speakingLevel.toLowerCase() })
-        .eq("id", interview.candidate_id);
-    } catch (err) {
-      console.error("Failed to update speaking_level on candidates:", err);
-    }
-
-    // Send email to Sam
-    try {
-      await sendSamNotificationEmail(interview, candidate, scores, speakingLevel, recruiterName, recruiterEmail);
-    } catch (err) {
-      console.error("Failed to send Sam notification email:", err);
     }
 
     return NextResponse.json({
@@ -134,7 +116,6 @@ export async function POST(request: NextRequest) {
         recommendation_reason: scores.recommendation_reason,
         feedback: scores.feedback,
         ai_notes: scores.ai_notes,
-        speaking_level: speakingLevel,
       },
       first_interview: {
         overall_score: interview.overall_score,
@@ -170,7 +151,6 @@ interface SecondInterviewScores {
 async function scoreSecondInterview(
   interview: Record<string, unknown>,
   candidate: Record<string, unknown> | null,
-  speakingLevel: string,
   transcript: string
 ): Promise<SecondInterviewScores> {
   const Anthropic = (await import("@anthropic-ai/sdk")).default;
@@ -194,16 +174,13 @@ Professionalism: ${interview.professionalism_score}/20
 FIRST INTERVIEW AI NOTES:
 ${interview.ai_notes || "None"}
 
-RECRUITER-ASSIGNED SPEAKING LEVEL:
-${speakingLevel}
-
 SECOND INTERVIEW TRANSCRIPT:
 ${transcript}
 
 Score this second interview on these five dimensions (each out of 20):
 Technical Knowledge (15% weight in second interview — first interview already tested this heavily)
 Problem Solving and Judgment (20% weight)
-Communication Clarity (20% weight — also consider the recruiter-assigned speaking level)
+Communication Clarity (20% weight)
 Relevant Experience Depth (25% weight — probe for specificity and consistency with first interview claims)
 Professionalism and Reliability (20% weight — how they handled difficult questions, spoke about past employers, demonstrated accountability)
 
@@ -251,7 +228,6 @@ Return exactly this JSON structure and nothing else:
 
   const scores = JSON.parse(jsonText);
 
-  // Validate and ensure correct combined_score calculation
   const secondOverall =
     (scores.second_technical || 0) +
     (scores.second_problem || 0) +
@@ -262,7 +238,6 @@ Return exactly this JSON structure and nothing else:
   const firstOverall = Number(interview.overall_score) || 0;
   const combinedScore = Math.round(firstOverall * 0.45 + secondOverall * 0.55);
 
-  // Determine recommendation with override rules
   let recommendation: "pass" | "hold" | "reject" = scores.recommendation || "hold";
   if (combinedScore >= 60 && (scores.second_professionalism || 0) >= 12) {
     recommendation = "pass";
@@ -272,7 +247,6 @@ Return exactly this JSON structure and nothing else:
   if (combinedScore < 50) {
     recommendation = "reject";
   }
-  // Keep Claude's recommendation if it's stricter (e.g. reject for red flags)
   if (scores.recommendation === "reject") {
     recommendation = "reject";
   }
@@ -290,103 +264,4 @@ Return exactly this JSON structure and nothing else:
     feedback: scores.feedback || "",
     ai_notes: scores.ai_notes || "",
   };
-}
-
-async function sendSamNotificationEmail(
-  interview: Record<string, unknown>,
-  candidate: Record<string, unknown> | null,
-  scores: SecondInterviewScores,
-  speakingLevel: string,
-  recruiterName: string,
-  recruiterEmail: string
-) {
-  const { Resend } = await import("resend");
-  const resend = new Resend(process.env.RESEND_API_KEY);
-
-  const displayName = (candidate?.display_name as string) || "Candidate";
-  const roleCategory = (candidate?.role_category as string) || (interview.role_category as string) || "";
-  const country = (candidate?.country as string) || "Unknown";
-  const candidateId = (candidate?.id as string) || (interview.candidate_id as string) || "";
-
-  const recBadge = scores.recommendation.toUpperCase();
-  const holdWarning = scores.recommendation === "hold"
-    ? `<p style="font-weight:bold;color:#d97706;font-size:16px;">ACTION REQUIRED: This candidate is on hold. Review and decide within 48 hours.</p>`
-    : "";
-
-  const staffvaUrl = process.env.NEXT_PUBLIC_STAFFVA_URL || "https://staffva.com";
-
-  const subject = `Second Interview Scored — ${displayName} — ${roleCategory} — ${recBadge} — Combined ${scores.combined_score}/100`;
-
-  const html = `
-${holdWarning}
-<h2>Second Interview Scored</h2>
-<p><strong>Candidate:</strong> ${displayName}</p>
-<p><strong>Role:</strong> ${roleCategory}</p>
-<p><strong>Country:</strong> ${country}</p>
-<p><strong>Recruiter:</strong> ${recruiterName} (${recruiterEmail})</p>
-<p><strong>Speaking Level:</strong> ${speakingLevel}</p>
-
-<h3>Scores</h3>
-<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;max-width:600px;">
-  <tr style="background:#1a1a2e;color:#fff;">
-    <th>Dimension</th>
-    <th>First Interview</th>
-    <th>Second Interview</th>
-  </tr>
-  <tr>
-    <td>Technical Knowledge</td>
-    <td>${interview.technical_knowledge_score}/20</td>
-    <td>${scores.second_technical}/20</td>
-  </tr>
-  <tr>
-    <td>Problem Solving</td>
-    <td>${interview.problem_solving_score}/20</td>
-    <td>${scores.second_problem}/20</td>
-  </tr>
-  <tr>
-    <td>Communication</td>
-    <td>${interview.communication_score}/20</td>
-    <td>${scores.second_communication}/20</td>
-  </tr>
-  <tr>
-    <td>Experience Depth</td>
-    <td>${interview.experience_depth_score}/20</td>
-    <td>${scores.second_experience}/20</td>
-  </tr>
-  <tr>
-    <td>Professionalism</td>
-    <td>${interview.professionalism_score}/20</td>
-    <td>${scores.second_professionalism}/20</td>
-  </tr>
-  <tr style="font-weight:bold;">
-    <td>Overall</td>
-    <td>${interview.overall_score}/100</td>
-    <td>${scores.second_overall}/100</td>
-  </tr>
-</table>
-
-<h3>Combined Score: ${scores.combined_score}/100</h3>
-<p><strong>First Interview Badge:</strong> ${interview.badge_level}</p>
-<p><strong>Recommendation:</strong> <span style="font-weight:bold;color:${scores.recommendation === "pass" ? "#22c55e" : scores.recommendation === "hold" ? "#d97706" : "#ef4444"}">${recBadge}</span></p>
-
-<h3>Recommendation Reason</h3>
-<p>${scores.recommendation_reason}</p>
-
-<h3>AI Feedback</h3>
-<p>${scores.feedback.replace(/\n/g, "<br>")}</p>
-
-<h3>AI Notes</h3>
-<p>${scores.ai_notes.replace(/\n/g, "<br>")}</p>
-
-<hr>
-<p><a href="${staffvaUrl}/candidates/${candidateId}">View StaffVA Profile</a></p>
-<p><a href="https://interview.staffva.com/recruiter/candidate/${interview.id}/second-interview">View Full Second Interview Scorecard</a></p>
-`;
-
-  await resend.emails.send({
-    from: "StaffVA Interviews <notifications@staffva.com>",
-    to: "sam@glostaffing.com",
-    subject,
-    html,
-  });
 }
