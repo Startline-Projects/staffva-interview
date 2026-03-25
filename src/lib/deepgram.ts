@@ -29,9 +29,12 @@ export async function createDeepgramTemporaryKey(): Promise<string> {
 }
 
 // Server-side transcription for a complete audio blob (fallback)
-export async function transcribeAudio(audioBuffer: Buffer | Uint8Array): Promise<string> {
+export async function transcribeAudio(audioBuffer: ArrayBuffer | Buffer | Uint8Array): Promise<string> {
   const apiKey = process.env.DEEPGRAM_API_KEY;
   if (!apiKey) throw new Error("DEEPGRAM_API_KEY is not configured");
+
+  // Convert to Blob for fetch body compatibility
+  const blob = new Blob([audioBuffer], { type: "audio/webm" });
 
   const response = await fetch(
     `${DEEPGRAM_API_URL}/listen?model=nova-3&smart_format=true&language=en`,
@@ -41,7 +44,7 @@ export async function transcribeAudio(audioBuffer: Buffer | Uint8Array): Promise
         Authorization: `Token ${apiKey}`,
         "Content-Type": "audio/webm",
       },
-      body: audioBuffer instanceof Uint8Array ? audioBuffer : new Uint8Array(audioBuffer),
+      body: blob,
     }
   );
 
