@@ -23,7 +23,7 @@ export default async function RecruiterDashboard() {
   // Get passed interviews for assigned categories
   const { data: interviews } = await supabase
     .from("ai_interviews")
-    .select("id, candidate_id, role_category, overall_score, badge_level, passed, second_interview_status, completed_at")
+    .select("id, candidate_id, role_category, overall_score, badge_level, passed, second_interview_status, combined_score, combined_recommendation, completed_at")
     .eq("passed", true)
     .in("role_category", assignedCategories.length > 0 ? assignedCategories : ["__none__"])
     .order("completed_at", { ascending: false });
@@ -72,9 +72,18 @@ export default async function RecruiterDashboard() {
             overall_score: number;
             badge_level: string;
             second_interview_status: string;
+            combined_score: number | null;
+            combined_recommendation: string | null;
             completed_at: string;
           }) => {
             const candidate = candidateMap[interview.candidate_id];
+            const showScoreButton = interview.second_interview_status === "scheduled" || interview.second_interview_status === "pending";
+            const isScored = interview.second_interview_status === "completed" && interview.combined_score;
+            const recColors: Record<string, string> = {
+              pass: "bg-green-900 text-green-300",
+              hold: "bg-amber-900 text-amber-300",
+              reject: "bg-red-900 text-red-300",
+            };
             return (
               <div key={interview.id} className="bg-gray-900 rounded-xl p-5 flex items-center justify-between">
                 <div className="flex items-center gap-4">
@@ -85,6 +94,11 @@ export default async function RecruiterDashboard() {
                   <span className={"px-3 py-1 rounded-full text-xs font-medium " + (badgeColors[interview.badge_level] || "bg-gray-700 text-gray-300")}>
                     {interview.badge_level}
                   </span>
+                  {isScored && interview.combined_recommendation && (
+                    <span className={"px-2 py-1 rounded text-xs font-bold " + (recColors[interview.combined_recommendation] || "bg-gray-800")}>
+                      {interview.combined_recommendation.toUpperCase()} — {interview.combined_score}/100
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-center gap-4">
                   <div className="text-right">
@@ -100,6 +114,14 @@ export default async function RecruiterDashboard() {
                   )}>
                     {interview.second_interview_status || "pending"}
                   </span>
+                  {showScoreButton && (
+                    <Link
+                      href={"/recruiter/candidate/" + interview.id + "/second-interview"}
+                      className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-sm font-medium transition-colors"
+                    >
+                      Score Second Interview
+                    </Link>
+                  )}
                   <Link
                     href={"/dashboard/interview/" + interview.id}
                     className="px-4 py-2 bg-amber-600 hover:bg-amber-700 rounded-lg text-sm font-medium transition-colors"
