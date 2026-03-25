@@ -50,7 +50,13 @@ function InterviewContent() {
       .then((res) => res.json())
       .then((data) => {
         if (data.error) {
-          setError(data.error);
+          if (data.error === "jwt expired" || data.error === "jwt malformed" || data.error === "Token expired") {
+            setError("Your interview link has expired. Please return to staffva.com and click 'Start AI Interview' again to get a new link.");
+          } else if (data.error === "Candidate not found") {
+            setError("We couldn't find your profile. Please return to staffva.com and try again.");
+          } else {
+            setError(data.error);
+          }
         } else {
           setCandidate(data.candidate);
         }
