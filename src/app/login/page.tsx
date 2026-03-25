@@ -54,7 +54,7 @@ export default function LoginPage() {
     <div className="min-h-screen bg-gray-950 text-white flex items-center justify-center">
       <div className="w-full max-w-sm px-6">
         <div className="text-center mb-8">
-          <h1 className="text-2xl font-bold">StaffVA Interview System</h1>
+          <h1 className="text-2xl font-bold">Recruiter Login</h1>
           <p className="text-gray-500 mt-2">Sign in to your account</p>
         </div>
 
