@@ -3,12 +3,8 @@ import { Resend } from "resend";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// Only the 3 that didn't send last time
 const recruiters = [
-  { name: "Manar", email: "careers@globalstaffing.asia", password: "Interview@Manar2026" },
-  { name: "Ranim", email: "hr@glostaffing.com", password: "Interview@Ranim2026" },
-  { name: "Jerome", email: "support@glostaffing.com", password: "Interview@Jerome2026" },
-  { name: "Abigail", email: "ops@glostaffing.com", password: "Interview@Abigail2026" },
-  { name: "Shelly", email: "marketing@glostaffing.com", password: "Interview@Shelly2026" },
   { name: "Ibraheem", email: "zak@glostaffing.com", password: "Interview@Ibraheem2026" },
   { name: "Eslam", email: "info@glostaffing.com", password: "Interview@Eslam2026" },
 ];
