@@ -188,6 +188,7 @@ export async function POST(request: NextRequest) {
           ai_interview_badge: scorecard.badge_level,
           ai_interview_score: scorecard.overall_score,
           ai_interview_passed: scorecard.passed,
+          ai_interview_completed_at: new Date().toISOString(),
         })
         .eq("id", payload.candidate_id);
     } catch (badgeErr) {
