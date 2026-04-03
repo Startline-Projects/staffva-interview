@@ -27,9 +27,16 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const hardTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
   const isRecordingRef = useRef(false);
   const mountedRef = useRef(true);
+
+  // Voice Activity Detection refs
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const vadFrameRef = useRef<number | null>(null);
+  const lastSpeechTimeRef = useRef<number>(0);
 
   // Auto-scroll conversation
   useEffect(() => {
@@ -194,16 +201,67 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
     setStatusText("Listening... Speak your answer");
     setCurrentTranscript("");
 
-    // Silence detection
-    let silenceCount = 0;
+    // Voice Activity Detection using Web Audio API
+    // Resets silence timer every time speech is detected
+    const SILENCE_THRESHOLD = 4500; // 4.5 seconds of silence = end of turn
+    const HARD_TIMEOUT = 45000;     // 45 second safety net
+    const SPEECH_LEVEL = 15;        // Audio level threshold (0-255)
+
+    lastSpeechTimeRef.current = Date.now();
+
+    // Set up AudioContext and AnalyserNode
+    if (!audioContextRef.current) {
+      audioContextRef.current = new AudioContext();
+    }
+    const audioContext = audioContextRef.current;
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.3;
+    analyserRef.current = analyser;
+
+    const source = audioContext.createMediaStreamSource(mediaStream);
+    source.connect(analyser);
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    // Monitor audio levels via requestAnimationFrame
+    function checkAudioLevel() {
+      if (!isRecordingRef.current) return;
+
+      analyser.getByteFrequencyData(dataArray);
+      // Average volume across frequency bins
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+      const average = sum / dataArray.length;
+
+      if (average > SPEECH_LEVEL) {
+        // Speech detected — reset silence timer
+        lastSpeechTimeRef.current = Date.now();
+      }
+
+      vadFrameRef.current = requestAnimationFrame(checkAudioLevel);
+    }
+    vadFrameRef.current = requestAnimationFrame(checkAudioLevel);
+
+    // Check silence duration every 500ms
     silenceTimerRef.current = setInterval(() => {
-      silenceCount++;
-      if (silenceCount >= 18) {
+      if (!isRecordingRef.current) return;
+      const silenceDuration = Date.now() - lastSpeechTimeRef.current;
+
+      if (silenceDuration >= SILENCE_THRESHOLD) {
+        // 4.5 seconds of genuine silence — end turn
         stopListeningAndProcess();
-      } else if (silenceCount === 8) {
+      } else if (silenceDuration >= 2500) {
         setStatusText("Take your time. I am listening.");
       }
-    }, 1000);
+    }, 500);
+
+    // Hard timeout safety net — 45 seconds max per answer
+    hardTimeoutRef.current = setTimeout(() => {
+      if (isRecordingRef.current) {
+        stopListeningAndProcess();
+      }
+    }, HARD_TIMEOUT);
   }
 
   // Stop recording and send to transcription
@@ -211,9 +269,18 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
     if (!isRecordingRef.current) return;
     isRecordingRef.current = false;
 
+    // Clean up all timers and VAD
     if (silenceTimerRef.current) {
       clearInterval(silenceTimerRef.current);
       silenceTimerRef.current = null;
+    }
+    if (hardTimeoutRef.current) {
+      clearTimeout(hardTimeoutRef.current);
+      hardTimeoutRef.current = null;
+    }
+    if (vadFrameRef.current) {
+      cancelAnimationFrame(vadFrameRef.current);
+      vadFrameRef.current = null;
     }
 
     const recorder = mediaRecorderRef.current;
@@ -289,6 +356,8 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
     return () => {
       mountedRef.current = false;
       if (silenceTimerRef.current) clearInterval(silenceTimerRef.current);
+      if (hardTimeoutRef.current) clearTimeout(hardTimeoutRef.current);
+      if (vadFrameRef.current) cancelAnimationFrame(vadFrameRef.current);
       if (mediaRecorderRef.current?.state === "recording") {
         mediaRecorderRef.current.stop();
       }
@@ -366,9 +435,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           {phase === "listening" && (
             <button
               onClick={stopListeningAndProcess}
-              className="px-8 py-3 bg-amber-600 hover:bg-amber-700 rounded-xl font-medium transition-colors"
+              className="px-10 py-4 bg-amber-600 hover:bg-amber-700 rounded-xl font-semibold text-lg transition-colors"
             >
-              Done Speaking
+              Done
             </button>
           )}
 
