@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { verifyInterviewToken } from "@/lib/auth/verify-token";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendCandidateResultsEmail, sendDelegationEmail } from "@/lib/emails/send-results";
@@ -57,149 +58,162 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ scored: true, interview });
     }
 
-    // Load candidate
-    const { data: candidate } = await supabase
-      .from("candidates")
-      .select("id, display_name, role_category, country")
-      .eq("id", payload.candidate_id)
-      .single();
-
-    // Load interview config for pass threshold
-    const { data: config } = await supabase
-      .from("interview_config")
-      .select("pass_threshold")
-      .eq("company_id", "staffva")
-      .single();
-
-    const passThreshold = config?.pass_threshold || 60;
-
-    // Build transcript text for Claude
-    const transcript: TranscriptEntry[] = interview.transcript || [];
-    const transcriptText = transcript.map((e: TranscriptEntry) => {
-      return (e.role === "interviewer" ? "ALEX: " : "CANDIDATE: ") + e.text;
-    }).join("\n\n");
-
-    // Generate scorecard via Claude
-    const scorecard = await generateScorecard(
-      candidate?.display_name || "Candidate",
-      candidate?.role_category || interview.role_category,
-      candidate?.country || "Unknown",
-      transcriptText,
-      passThreshold
-    );
-
-    // Update interview record with scores
-    const { error: updateError } = await supabase
-      .from("ai_interviews")
-      .update({
-        overall_score: scorecard.overall_score,
-        badge_level: scorecard.badge_level,
-        technical_knowledge_score: scorecard.technical_knowledge_score,
-        problem_solving_score: scorecard.problem_solving_score,
-        communication_score: scorecard.communication_score,
-        experience_depth_score: scorecard.experience_depth_score,
-        professionalism_score: scorecard.professionalism_score,
-        technical_knowledge_feedback: scorecard.technical_knowledge_feedback,
-        problem_solving_feedback: scorecard.problem_solving_feedback,
-        communication_feedback: scorecard.communication_feedback,
-        experience_depth_feedback: scorecard.experience_depth_feedback,
-        professionalism_feedback: scorecard.professionalism_feedback,
-        strengths: scorecard.strengths,
-        weaknesses: scorecard.weaknesses,
-        improvement_feedback: scorecard.improvement_feedback,
-        perfect_score_path: scorecard.perfect_score_path,
-        ai_notes: scorecard.ai_notes,
-        passed: scorecard.passed,
-        advanced_to_second_interview: scorecard.passed,
-        status: "completed",
-        completed_at: new Date().toISOString(),
-      })
-      .eq("id", interviewId);
-
-    if (updateError) {
-      return NextResponse.json({ error: "Failed to save scores: " + updateError.message }, { status: 500 });
-    }
-
-    // Get candidate email for notifications
-    const { data: candidateFull } = await supabase
-      .from("candidates")
-      .select("id, display_name, email")
-      .eq("id", payload.candidate_id)
-      .single();
-
-    // Build interview data for emails
-    const emailInterviewData = {
-      ...scorecard,
-      role_category: interview.role_category,
-      transcript: interview.transcript || [],
-      candidate_id: payload.candidate_id,
-    };
-
-    // Send candidate results email
-    try {
-      if (candidateFull?.email) {
-        await sendCandidateResultsEmail(
-          { display_name: candidateFull.display_name, email: candidateFull.email },
-          emailInterviewData
-        );
+    // Return immediately — scoring continues in the background via after()
+    after(async () => {
+      try {
+        await performScoring(interview, payload.candidate_id);
+      } catch (err) {
+        console.error("Background scoring failed:", err);
       }
-    } catch (emailErr) {
-      console.error("Failed to send candidate email:", emailErr);
-    }
+    });
 
-    // If passed, assign second interviewer and send delegation email
-    if (scorecard.passed) {
-      const { data: delegation } = await supabase
-        .from("interviewer_delegation")
-        .select("interviewer_name, interviewer_email")
-        .eq("company_id", "staffva")
-        .eq("role_category", interview.role_category)
-        .limit(1)
-        .maybeSingle();
-
-      if (delegation) {
-        await supabase
-          .from("ai_interviews")
-          .update({
-            second_interviewer_assigned: delegation.interviewer_name,
-            second_interviewer_email: delegation.interviewer_email,
-          })
-          .eq("id", interviewId);
-
-        // Send delegation email to recruiter
-        try {
-          await sendDelegationEmail(
-            { display_name: candidateFull?.display_name || "Candidate" },
-            emailInterviewData,
-            delegation.interviewer_name,
-            delegation.interviewer_email
-          );
-        } catch (emailErr) {
-          console.error("Failed to send delegation email:", emailErr);
-        }
-      }
-    }
-
-    // Phase 10: Write badge back to candidates table in StaffVA
-    try {
-      await supabase
-        .from("candidates")
-        .update({
-          ai_interview_badge: scorecard.badge_level,
-          ai_interview_score: scorecard.overall_score,
-          ai_interview_passed: scorecard.passed,
-          ai_interview_completed_at: new Date().toISOString(),
-        })
-        .eq("id", payload.candidate_id);
-    } catch (badgeErr) {
-      console.error("Failed to write badge to candidate:", badgeErr);
-    }
-
-    return NextResponse.json({ scored: true, scorecard });
+    return NextResponse.json({ scored: false, scoring_started: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Scoring failed";
     console.error("Scoring error:", message);
     return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+async function performScoring(
+  interview: Record<string, unknown>,
+  candidateId: string
+) {
+  const supabase = createSupabaseServiceClient();
+
+  // Load candidate
+  const { data: candidate } = await supabase
+    .from("candidates")
+    .select("id, display_name, role_category, country, email")
+    .eq("id", candidateId)
+    .single();
+
+  // Load interview config for pass threshold
+  const { data: config } = await supabase
+    .from("interview_config")
+    .select("pass_threshold")
+    .eq("company_id", "staffva")
+    .single();
+
+  const passThreshold = config?.pass_threshold || 60;
+
+  // Build transcript text for Claude
+  const transcript: TranscriptEntry[] = (interview.transcript as TranscriptEntry[]) || [];
+  const transcriptText = transcript.map((e: TranscriptEntry) => {
+    return (e.role === "interviewer" ? "ALEX: " : "CANDIDATE: ") + e.text;
+  }).join("\n\n");
+
+  // Generate scorecard via Claude
+  const scorecard = await generateScorecard(
+    candidate?.display_name || "Candidate",
+    candidate?.role_category || (interview.role_category as string),
+    candidate?.country || "Unknown",
+    transcriptText,
+    passThreshold
+  );
+
+  // Update interview record with scores
+  const { error: updateError } = await supabase
+    .from("ai_interviews")
+    .update({
+      overall_score: scorecard.overall_score,
+      badge_level: scorecard.badge_level,
+      technical_knowledge_score: scorecard.technical_knowledge_score,
+      problem_solving_score: scorecard.problem_solving_score,
+      communication_score: scorecard.communication_score,
+      experience_depth_score: scorecard.experience_depth_score,
+      professionalism_score: scorecard.professionalism_score,
+      technical_knowledge_feedback: scorecard.technical_knowledge_feedback,
+      problem_solving_feedback: scorecard.problem_solving_feedback,
+      communication_feedback: scorecard.communication_feedback,
+      experience_depth_feedback: scorecard.experience_depth_feedback,
+      professionalism_feedback: scorecard.professionalism_feedback,
+      strengths: scorecard.strengths,
+      weaknesses: scorecard.weaknesses,
+      improvement_feedback: scorecard.improvement_feedback,
+      perfect_score_path: scorecard.perfect_score_path,
+      ai_notes: scorecard.ai_notes,
+      passed: scorecard.passed,
+      advanced_to_second_interview: scorecard.passed,
+      status: "completed",
+      completed_at: new Date().toISOString(),
+    })
+    .eq("id", interview.id);
+
+  if (updateError) {
+    console.error("Failed to save scores:", updateError.message);
+    return;
+  }
+
+  // Send candidate results email
+  try {
+    if (candidate?.email) {
+      const emailInterviewData = {
+        ...scorecard,
+        role_category: interview.role_category as string,
+        transcript: (interview.transcript as TranscriptEntry[]) || [],
+        candidate_id: candidateId,
+      };
+      await sendCandidateResultsEmail(
+        { display_name: candidate.display_name, email: candidate.email },
+        emailInterviewData
+      );
+    }
+  } catch (emailErr) {
+    console.error("Failed to send candidate email:", emailErr);
+  }
+
+  // If passed, assign second interviewer and send delegation email
+  if (scorecard.passed) {
+    const { data: delegation } = await supabase
+      .from("interviewer_delegation")
+      .select("interviewer_name, interviewer_email")
+      .eq("company_id", "staffva")
+      .eq("role_category", interview.role_category as string)
+      .limit(1)
+      .maybeSingle();
+
+    if (delegation) {
+      await supabase
+        .from("ai_interviews")
+        .update({
+          second_interviewer_assigned: delegation.interviewer_name,
+          second_interviewer_email: delegation.interviewer_email,
+        })
+        .eq("id", interview.id);
+
+      try {
+        const emailInterviewData = {
+          ...scorecard,
+          role_category: interview.role_category as string,
+          transcript: (interview.transcript as TranscriptEntry[]) || [],
+          candidate_id: candidateId,
+        };
+        await sendDelegationEmail(
+          { display_name: candidate?.display_name || "Candidate" },
+          emailInterviewData,
+          delegation.interviewer_name,
+          delegation.interviewer_email
+        );
+      } catch (emailErr) {
+        console.error("Failed to send delegation email:", emailErr);
+      }
+    }
+  }
+
+  // Write badge back to candidates table
+  try {
+    await supabase
+      .from("candidates")
+      .update({
+        ai_interview_badge: scorecard.badge_level,
+        ai_interview_score: scorecard.overall_score,
+        ai_interview_passed: scorecard.passed,
+        ai_interview_completed_at: new Date().toISOString(),
+      })
+      .eq("id", candidateId);
+  } catch (badgeErr) {
+    console.error("Failed to write badge to candidate:", badgeErr);
   }
 }
 
@@ -229,7 +243,6 @@ async function generateScorecard(
     throw new Error("Unexpected response type from Claude");
   }
 
-  // Extract JSON from response (Claude might wrap it in markdown code blocks)
   let jsonText = content.text;
   const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
   if (jsonMatch) {

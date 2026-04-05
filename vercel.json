@@ -1,0 +1,19 @@
+{
+  "functions": {
+    "src/app/api/interview/score/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/interview/session/route.ts": {
+      "maxDuration": 60
+    },
+    "src/app/api/interview/tts/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/interview/transcribe/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/recruiter/score-second-interview/route.ts": {
+      "maxDuration": 60
+    }
+  }
+}

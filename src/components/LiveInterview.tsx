@@ -137,41 +137,21 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         setStatusText("Interview complete. Alex is wrapping up...");
         await playAIAudio(data.response);
 
-        // Score the interview with retry
-        setStatusText("Generating your scorecard... This takes about 30 seconds.");
-        let scored = false;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            const scoreRes = await fetch("/api/interview/score", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ token, interviewId: currentInterviewId }),
-            });
-            if (scoreRes.ok) {
-              const scoreData = await scoreRes.json();
-              if (scoreData.scored) {
-                scored = true;
-                break;
-              }
-            }
-            // Wait before retry
-            if (attempt < 2) {
-              setStatusText("Still generating... please wait.");
-              await new Promise(r => setTimeout(r, 5000));
-            }
-          } catch {
-            if (attempt < 2) {
-              setStatusText("Retrying scorecard generation...");
-              await new Promise(r => setTimeout(r, 5000));
-            }
-          }
+        // Trigger scoring in the background — the API returns immediately
+        // and processes via next/server after()
+        setStatusText("Generating your scorecard...");
+        try {
+          await fetch("/api/interview/score", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token, interviewId: currentInterviewId }),
+          });
+        } catch {
+          // Even if the request fails, redirect — results page will poll
         }
 
-        if (scored) {
-          setStatusText("Your results are ready. Redirecting...");
-        } else {
-          setStatusText("Redirecting to results... scores may take a moment to appear.");
-        }
+        // Redirect to results page which polls until scores are ready
+        setStatusText("Redirecting to your results...");
         setTimeout(() => {
           window.location.href = "/interview/results?id=" + currentInterviewId + "&token=" + token;
         }, 2000);
