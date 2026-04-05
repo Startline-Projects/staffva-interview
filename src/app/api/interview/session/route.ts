@@ -231,12 +231,23 @@ async function getClaudeResponse(
     }
 
     // Determine if interview should end
+    const lower = text.toLowerCase();
     const isComplete = canComplete && (
-      text.toLowerCase().includes("concludes our interview") ||
-      text.toLowerCase().includes("end of the interview") ||
-      text.toLowerCase().includes("that wraps up") ||
-      text.toLowerCase().includes("have enough information") ||
-      text.toLowerCase().includes("completed your interview") ||
+      lower.includes("concludes our interview") ||
+      lower.includes("end of the interview") ||
+      lower.includes("that wraps up") ||
+      lower.includes("have enough information") ||
+      lower.includes("have all the information") ||
+      lower.includes("completed your interview") ||
+      lower.includes("this concludes") ||
+      lower.includes("interview is now complete") ||
+      lower.includes("interview is complete") ||
+      lower.includes("thank you for your time today") ||
+      lower.includes("hear back from staffva") ||
+      lower.includes("next few business days") ||
+      lower.includes("have a great day") ||
+      (lower.includes("goodbye") && lower.includes("thank")) ||
+      (lower.includes("take care") && canComplete && questionsAsked >= 10) ||
       questionsAsked >= 15
     );
 
