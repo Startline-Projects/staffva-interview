@@ -137,19 +137,41 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         setStatusText("Interview complete. Alex is wrapping up...");
         await playAIAudio(data.response);
 
-        // Score the interview
+        // Score the interview with retry
         setStatusText("Generating your scorecard... This takes about 30 seconds.");
-        try {
-          await fetch("/api/interview/score", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ token, interviewId: currentInterviewId }),
-          });
-        } catch {
-          // Scoring error — still redirect, scoring can be retried
+        let scored = false;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const scoreRes = await fetch("/api/interview/score", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ token, interviewId: currentInterviewId }),
+            });
+            if (scoreRes.ok) {
+              const scoreData = await scoreRes.json();
+              if (scoreData.scored) {
+                scored = true;
+                break;
+              }
+            }
+            // Wait before retry
+            if (attempt < 2) {
+              setStatusText("Still generating... please wait.");
+              await new Promise(r => setTimeout(r, 5000));
+            }
+          } catch {
+            if (attempt < 2) {
+              setStatusText("Retrying scorecard generation...");
+              await new Promise(r => setTimeout(r, 5000));
+            }
+          }
         }
 
-        setStatusText("Your results are ready. Redirecting...");
+        if (scored) {
+          setStatusText("Your results are ready. Redirecting...");
+        } else {
+          setStatusText("Redirecting to results... scores may take a moment to appear.");
+        }
         setTimeout(() => {
           window.location.href = "/interview/results?id=" + currentInterviewId + "&token=" + token;
         }, 2000);

@@ -47,6 +47,9 @@ function ResultsContent() {
       return;
     }
 
+    let pollCount = 0;
+    let pollTimer: NodeJS.Timeout | null = null;
+
     async function loadResults() {
       try {
         // Load candidate info
@@ -60,22 +63,42 @@ function ResultsContent() {
 
         if (data.error) {
           setError(data.error);
-        } else {
+          setLoading(false);
+        } else if (data.interview && data.interview.overall_score) {
+          // Scores are ready
           setResult(data.interview);
+          setLoading(false);
+        } else {
+          // Scores not ready yet — poll up to 12 times (60 seconds)
+          pollCount++;
+          if (pollCount <= 12) {
+            setError(null);
+            pollTimer = setTimeout(loadResults, 5000);
+          } else {
+            setError("Scoring is taking longer than expected. Please refresh the page in a minute.");
+            setLoading(false);
+          }
         }
       } catch {
         setError("Failed to load results.");
+        setLoading(false);
       }
-      setLoading(false);
     }
 
     loadResults();
+
+    return () => {
+      if (pollTimer) clearTimeout(pollTimer);
+    };
   }, [interviewId, token]);
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-950 text-white">
-        <p className="text-lg">Loading your results...</p>
+        <div className="text-center">
+          <p className="text-lg mb-2">Generating your scorecard...</p>
+          <p className="text-gray-500 text-sm">This usually takes 20-30 seconds.</p>
+        </div>
       </div>
     );
   }
