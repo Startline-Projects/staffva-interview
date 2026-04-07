@@ -145,6 +145,32 @@ async function performScoring(
     return;
   }
 
+  // Write back to candidates table immediately after ai_interviews update
+  const { error: candidateUpdateError } = await supabase
+    .from("candidates")
+    .update({
+      ai_interview_badge: scorecard.badge_level,
+      ai_interview_score: scorecard.overall_score,
+      ai_interview_passed: scorecard.passed,
+      ai_interview_completed_at: new Date().toISOString(),
+    })
+    .eq("id", candidateId);
+
+  if (candidateUpdateError) {
+    console.error(`[CRITICAL] Failed to write back to candidates table for ${candidateId}:`, candidateUpdateError.message);
+  } else {
+    console.log(`[SUCCESS] Candidate ${candidateId} writeback complete. Score: ${scorecard.overall_score}, Passed: ${scorecard.passed}`);
+  }
+
+  // NOTE: admin_status writeback skipped — no admin_status or admin_status_type enum
+  // found in this codebase. Add the enum to Supabase first, then uncomment:
+  // if (scorecard.passed) {
+  //   await supabase
+  //     .from("candidates")
+  //     .update({ admin_status: 'active' })
+  //     .eq("id", candidateId);
+  // }
+
   // Send candidate results email
   try {
     if (candidate?.email) {
@@ -201,20 +227,6 @@ async function performScoring(
     }
   }
 
-  // Write badge back to candidates table
-  try {
-    await supabase
-      .from("candidates")
-      .update({
-        ai_interview_badge: scorecard.badge_level,
-        ai_interview_score: scorecard.overall_score,
-        ai_interview_passed: scorecard.passed,
-        ai_interview_completed_at: new Date().toISOString(),
-      })
-      .eq("id", candidateId);
-  } catch (badgeErr) {
-    console.error("Failed to write badge to candidate:", badgeErr);
-  }
 }
 
 async function generateScorecard(
