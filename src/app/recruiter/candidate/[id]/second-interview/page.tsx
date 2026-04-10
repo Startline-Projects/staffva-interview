@@ -255,7 +255,7 @@ export default function SecondInterviewPage() {
       <div className="min-h-screen bg-gray-950 text-white">
         <div className="max-w-4xl mx-auto py-8 px-4">
           <button
-            onClick={() => router.push("/dashboard")}
+            onClick={() => router.push("/recruiter")}
             className="text-gray-500 hover:text-white text-sm mb-6 inline-block"
           >
             &larr; Back to dashboard
@@ -427,7 +427,7 @@ export default function SecondInterviewPage() {
     <div className="min-h-screen bg-gray-950 text-white">
       <div className="max-w-4xl mx-auto py-8 px-4">
         <button
-          onClick={() => router.push("/dashboard")}
+          onClick={() => router.push("/recruiter")}
           className="text-gray-500 hover:text-white text-sm mb-6 inline-block"
         >
           &larr; Back to dashboard
