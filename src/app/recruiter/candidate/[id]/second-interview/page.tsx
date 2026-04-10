@@ -34,6 +34,7 @@ interface InterviewData {
   combined_recommendation: string | null;
   combined_recommendation_reason: string | null;
   speaking_level: string | null;
+  pre_interview_guide: string | null;
 }
 
 interface CandidateData {
@@ -496,6 +497,52 @@ export default function SecondInterviewPage() {
             <div className="border-t border-gray-800 pt-4">
               <p className="text-gray-500 text-xs mb-1">Suggested Focus Areas for Second Interview</p>
               <p className="text-gray-400 text-sm">{interview.improvement_feedback}</p>
+            </div>
+          )}
+        </div>
+
+        {/* SECTION — Pre-Interview Guide */}
+        <div className="bg-gray-900 rounded-xl p-6 mb-6 border border-gray-800">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-semibold">Pre-Interview Guide</h2>
+            {interview?.pre_interview_guide && (
+              <button
+                type="button"
+                onClick={() => {
+                  const printWindow = window.open("", "_blank");
+                  if (printWindow) {
+                    printWindow.document.write(
+                      "<html><head><title>Pre-Interview Guide — " +
+                        (candidate?.display_name || "Candidate") +
+                        "</title>" +
+                        "<style>body { font-family: 'Courier New', Courier, monospace; font-size: 13px; line-height: 1.6; padding: 40px; white-space: pre-wrap; color: #1a1a1a; max-width: 800px; } @media print { body { padding: 20px; } }</style>" +
+                        "</head><body>" +
+                        (interview.pre_interview_guide ?? "")
+                          .replace(/&/g, "&amp;")
+                          .replace(/</g, "&lt;")
+                          .replace(/>/g, "&gt;") +
+                        "</body></html>"
+                    );
+                    printWindow.document.close();
+                    printWindow.print();
+                  }
+                }}
+                className="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm text-gray-300 transition-colors flex items-center gap-2"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                Print Guide
+              </button>
+            )}
+          </div>
+          {interview?.pre_interview_guide ? (
+            <pre className="whitespace-pre-wrap text-gray-300 text-sm leading-relaxed font-mono bg-gray-800/50 rounded-lg p-4 max-h-[600px] overflow-y-auto">
+              {interview.pre_interview_guide}
+            </pre>
+          ) : (
+            <div className="text-center py-8">
+              <p className="text-gray-500 text-sm">
+                Guide is being generated — refresh in a moment.
+              </p>
             </div>
           )}
         </div>

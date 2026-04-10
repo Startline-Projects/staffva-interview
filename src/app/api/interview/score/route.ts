@@ -3,6 +3,7 @@ import { after } from "next/server";
 import { verifyInterviewToken } from "@/lib/auth/verify-token";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendCandidateResultsEmail, sendDelegationEmail } from "@/lib/emails/send-results";
+import { generateAndSaveGuide } from "@/lib/generate-pre-interview-guide";
 
 interface TranscriptEntry {
   role: "interviewer" | "candidate";
@@ -225,6 +226,23 @@ async function performScoring(
         console.error("Failed to send delegation email:", emailErr);
       }
     }
+
+    // Generate pre-interview guide for the recruiter (fire-and-forget)
+    generateAndSaveGuide({
+      id: interview.id as string,
+      role_category: (interview.role_category as string) || "",
+      overall_score: scorecard.overall_score,
+      badge_level: scorecard.badge_level,
+      technical_knowledge_score: scorecard.technical_knowledge_score,
+      problem_solving_score: scorecard.problem_solving_score,
+      communication_score: scorecard.communication_score,
+      experience_depth_score: scorecard.experience_depth_score,
+      professionalism_score: scorecard.professionalism_score,
+      ai_notes: scorecard.ai_notes,
+      improvement_feedback: scorecard.improvement_feedback,
+    }).catch((err) =>
+      console.error("[PRE-INTERVIEW GUIDE] Unhandled error:", err)
+    );
   }
 
 }
