@@ -85,6 +85,29 @@ export async function sendCandidateResultsEmail(candidate: CandidateData, interv
   });
 }
 
+export async function sendFailEmail(candidate: CandidateData, score: number) {
+  if (!candidate.email) return;
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  const firstName = candidate.display_name.split(" ")[0];
+
+  const html = "<div style='font-family:Arial,sans-serif;max-width:600px;'>" +
+    "<h2>Hi " + firstName + ",</h2>" +
+    "<p>Thank you for completing your StaffVA AI interview.</p>" +
+    "<p>Your score: <strong>" + score + " out of 100</strong>.</p>" +
+    "<p>A score of <strong>60 or higher</strong> is required to proceed to the next stage.</p>" +
+    "<p><strong>Retake available:</strong> You can retake your interview in 3 days. We will send you an email as soon as your retake is ready.</p>" +
+    "<p>Use the time to review the role fundamentals and prepare specific examples from your experience. Your new score will replace this one.</p>" +
+    "</div>";
+
+  await resend.emails.send({
+    from: "StaffVA Interview System <noreply@staffva.com>",
+    to: candidate.email,
+    subject: "Your AI interview results — retake available in 3 days",
+    html,
+  });
+}
+
 export async function sendDelegationEmail(
   candidate: CandidateData,
   interview: InterviewData,

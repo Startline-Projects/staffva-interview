@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import { verifyInterviewToken } from "@/lib/auth/verify-token";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { sendCandidateResultsEmail, sendDelegationEmail } from "@/lib/emails/send-results";
+import { sendCandidateResultsEmail, sendDelegationEmail, sendFailEmail } from "@/lib/emails/send-results";
 import { generateAndSaveGuide } from "@/lib/generate-pre-interview-guide";
 
 interface TranscriptEntry {
@@ -113,6 +113,15 @@ async function performScoring(
     passThreshold
   );
 
+  // Fail gate: count prior attempts for retake tracking
+  const passed = scorecard.passed;
+  const attemptCount = await supabase
+    .from("interview_attempts")
+    .select("id", { count: "exact" })
+    .eq("candidate_id", candidateId);
+
+  const priorAttempts = attemptCount.count ?? 0;
+
   // Update interview record with scores
   const { error: updateError } = await supabase
     .from("ai_interviews")
@@ -152,42 +161,64 @@ async function performScoring(
     .update({
       ai_interview_badge: scorecard.badge_level,
       ai_interview_score: scorecard.overall_score,
-      ai_interview_passed: scorecard.passed,
+      ai_interview_passed: passed,
       ai_interview_completed_at: new Date().toISOString(),
+      admin_status: passed ? "pending_2nd_interview" : "ai_interview_failed",
+      ai_interview_retake_notified_at: null,
     })
     .eq("id", candidateId);
 
   if (candidateUpdateError) {
     console.error(`[CRITICAL] Failed to write back to candidates table for ${candidateId}:`, candidateUpdateError.message);
   } else {
-    console.log(`[SUCCESS] Candidate ${candidateId} writeback complete. Score: ${scorecard.overall_score}, Passed: ${scorecard.passed}`);
+    console.log(`[SUCCESS] Candidate ${candidateId} writeback complete. Score: ${scorecard.overall_score}, Passed: ${passed}`);
   }
 
-  // NOTE: admin_status writeback skipped — no admin_status or admin_status_type enum
-  // found in this codebase. Add the enum to Supabase first, then uncomment:
-  // if (scorecard.passed) {
-  //   await supabase
-  //     .from("candidates")
-  //     .update({ admin_status: 'active' })
-  //     .eq("id", candidateId);
-  // }
-
-  // Send candidate results email
-  try {
-    if (candidate?.email) {
-      const emailInterviewData = {
-        ...scorecard,
-        role_category: interview.role_category as string,
-        transcript: (interview.transcript as TranscriptEntry[]) || [],
+  // On fail: log attempt and send retake-notice email
+  if (!passed) {
+    const { error: attemptInsertError } = await supabase
+      .from("interview_attempts")
+      .insert({
         candidate_id: candidateId,
-      };
-      await sendCandidateResultsEmail(
-        { display_name: candidate.display_name, email: candidate.email },
-        emailInterviewData
-      );
+        attempt_number: priorAttempts + 1,
+        ai_interview_id: interview.id as string,
+        next_retake_available_at: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+      });
+
+    if (attemptInsertError) {
+      console.error(`[CRITICAL] Failed to insert interview_attempts row for ${candidateId}:`, attemptInsertError.message);
     }
-  } catch (emailErr) {
-    console.error("Failed to send candidate email:", emailErr);
+
+    try {
+      if (candidate?.email) {
+        await sendFailEmail(
+          { display_name: candidate.display_name, email: candidate.email },
+          scorecard.overall_score
+        );
+      }
+    } catch (emailErr) {
+      console.error("Failed to send fail email:", emailErr);
+    }
+  }
+
+  // Send candidate results email (pass only — fail path uses sendFailEmail above)
+  if (passed) {
+    try {
+      if (candidate?.email) {
+        const emailInterviewData = {
+          ...scorecard,
+          role_category: interview.role_category as string,
+          transcript: (interview.transcript as TranscriptEntry[]) || [],
+          candidate_id: candidateId,
+        };
+        await sendCandidateResultsEmail(
+          { display_name: candidate.display_name, email: candidate.email },
+          emailInterviewData
+        );
+      }
+    } catch (emailErr) {
+      console.error("Failed to send candidate email:", emailErr);
+    }
   }
 
   // If passed, assign second interviewer and send delegation email
