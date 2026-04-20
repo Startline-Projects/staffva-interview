@@ -19,12 +19,20 @@ export async function GET(request: NextRequest) {
     const { data: candidate, error } = await supabase
       .from("candidates")
       .select(
-        "id, display_name, country, role_category, english_written_tier, speaking_level, bio, us_client_experience"
+        "id, display_name, country, role_category, english_written_tier, bio, us_client_experience"
       )
       .eq("id", payload.candidate_id)
       .single();
 
-    if (error || !candidate) {
+    if (error && error.code !== "PGRST116") {
+      console.error("Supabase candidate lookup failed:", error);
+      return NextResponse.json(
+        { error: "Database error during candidate lookup" },
+        { status: 500 }
+      );
+    }
+
+    if (!candidate) {
       return NextResponse.json(
         { error: "Candidate not found" },
         { status: 404 }

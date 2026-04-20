@@ -10,7 +10,6 @@ interface Candidate {
   country: string;
   role_category: string;
   english_written_tier: string;
-  speaking_level: string;
   bio: string;
   us_client_experience: boolean;
 }
