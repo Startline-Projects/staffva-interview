@@ -13,7 +13,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 
   if (!user) return null;
 
-  const role = user.user_metadata?.interview_role;
+  const role = user.app_metadata?.interview_role;
   const name = user.user_metadata?.interview_name || user.user_metadata?.name || "User";
 
   if (!role) return null;

@@ -43,6 +43,7 @@ export async function POST() {
     try {
       const { error } = await supabase.auth.admin.updateUserById(leyanExists.id, {
         user_metadata: { interview_role: "recruiter", interview_name: "Leyan" },
+        app_metadata: { interview_role: "recruiter" },
       });
       if (error) throw error;
       results.push({ step: "Update Leyan metadata", status: "success" });
@@ -57,6 +58,7 @@ export async function POST() {
         password: "Interview@Leyan2026",
         email_confirm: true,
         user_metadata: { interview_role: "recruiter", interview_name: "Leyan" },
+        app_metadata: { interview_role: "recruiter" },
       });
       if (error) throw error;
       results.push({ step: "Create Leyan account", status: "success" });

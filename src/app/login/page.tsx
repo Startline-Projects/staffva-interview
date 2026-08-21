@@ -30,7 +30,7 @@ export default function LoginPage() {
       }
 
       // Check if user has interview_role metadata
-      const role = data.user?.user_metadata?.interview_role;
+      const role = data.user?.app_metadata?.interview_role;
       if (!role) {
         setError("You do not have access to the interview system.");
         await supabase.auth.signOut();

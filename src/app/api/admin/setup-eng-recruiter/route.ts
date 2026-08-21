@@ -29,7 +29,7 @@ export async function POST() {
     results.push({ step: "Find auth user", status: "found", detail: recruiterUserId });
 
     // Grant recruiter role if not already set
-    const existingRole = recruiterUser.user_metadata?.interview_role;
+    const existingRole = recruiterUser.app_metadata?.interview_role;
     if (existingRole === "recruiter") {
       results.push({ step: "Grant recruiter role", status: "already set" });
     } else {
@@ -40,6 +40,10 @@ export async function POST() {
           ...recruiterUser.user_metadata,
           interview_role: "recruiter",
           interview_name: RECRUITER_NAME,
+        },
+        app_metadata: {
+          ...recruiterUser.app_metadata,
+          interview_role: "recruiter",
         },
       });
       if (updateErr) {
@@ -56,6 +60,9 @@ export async function POST() {
       user_metadata: {
         interview_role: "recruiter",
         interview_name: RECRUITER_NAME,
+      },
+      app_metadata: {
+        interview_role: "recruiter",
       },
     });
     if (createErr || !newUser.user) {

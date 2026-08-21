@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
     }
 
-    const role = user.user_metadata?.interview_role;
+    const role = user.app_metadata?.interview_role;
     const recruiterName = user.user_metadata?.interview_name || "Recruiter";
     const recruiterEmail = user.email || "";
 
