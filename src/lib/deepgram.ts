@@ -33,8 +33,19 @@ export async function transcribeAudio(audioBuffer: ArrayBuffer | Buffer | Uint8A
   const apiKey = process.env.DEEPGRAM_API_KEY;
   if (!apiKey) throw new Error("DEEPGRAM_API_KEY is not configured");
 
-  // Convert to Blob for fetch body compatibility
-  const blob = new Blob([audioBuffer], { type: "audio/webm" });
+  // Convert to Blob for fetch body compatibility.
+  // Copied into a plain Uint8Array rather than passing the Buffer directly:
+  // a Node Buffer's underlying storage is typed as ArrayBufferLike (which
+  // includes SharedArrayBuffer), and that is not assignable to BlobPart.
+  const source =
+    audioBuffer instanceof ArrayBuffer ? new Uint8Array(audioBuffer) : audioBuffer;
+  // `new Uint8Array(length)` is inferred as Uint8Array<ArrayBuffer> — the
+  // narrow type BlobPart requires. Annotating it as plain `Uint8Array` would
+  // widen it back to ArrayBufferLike and fail again.
+  const bytes = new Uint8Array(source.byteLength);
+  bytes.set(source);
+
+  const blob = new Blob([bytes], { type: "audio/webm" });
 
   // Bound the upstream call. The route's platform timeout is 30s, so failing at
   // 20s leaves room to return a proper error instead of being killed mid-flight
