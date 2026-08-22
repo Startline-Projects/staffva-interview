@@ -1,10 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/auth/get-session-user";
 import { Resend } from "resend";
 import crypto from "crypto";
 
 export async function POST(request: NextRequest) {
   try {
+    // Admin only. This route resets an arbitrary user's password via the
+    // service role; previously it had no auth at all, so anyone could reset
+    // any account's password (including an admin's) by posting their email.
+    const sessionUser = await getSessionUser();
+    if (!sessionUser || sessionUser.role !== "admin") {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    }
+
     const { email } = await request.json();
 
     if (!email) {
