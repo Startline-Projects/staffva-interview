@@ -36,17 +36,34 @@ export async function transcribeAudio(audioBuffer: ArrayBuffer | Buffer | Uint8A
   // Convert to Blob for fetch body compatibility
   const blob = new Blob([audioBuffer], { type: "audio/webm" });
 
-  const response = await fetch(
-    `${DEEPGRAM_API_URL}/listen?model=nova-3&smart_format=true&language=en`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Token ${apiKey}`,
-        "Content-Type": "audio/webm",
-      },
-      body: blob,
+  // Bound the upstream call. The route's platform timeout is 30s, so failing at
+  // 20s leaves room to return a proper error instead of being killed mid-flight
+  // (which the client could not distinguish from a real transcription result).
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+
+  let response: Response;
+  try {
+    response = await fetch(
+      `${DEEPGRAM_API_URL}/listen?model=nova-3&smart_format=true&language=en`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Token ${apiKey}`,
+          "Content-Type": "audio/webm",
+        },
+        body: blob,
+        signal: controller.signal,
+      }
+    );
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("Deepgram transcription timed out after 20s");
     }
-  );
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!response.ok) {
     const error = await response.text();

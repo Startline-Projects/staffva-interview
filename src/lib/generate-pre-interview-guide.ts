@@ -26,7 +26,12 @@ export async function generatePreInterviewGuide(
   interview: InterviewRecord
 ): Promise<string> {
   const Anthropic = (await import("@anthropic-ai/sdk")).default;
-  const client = new Anthropic();
+  const client = new Anthropic({
+      // fire-and-forget guide generation. The SDK default is 10 minutes, far beyond the
+      // platform function limit, so a slow call would be killed mid-flight.
+      timeout: 25000,
+      maxRetries: 1,
+    });
 
   const systemPrompt =
     "You are a recruiter preparation specialist for a professional offshore talent " +

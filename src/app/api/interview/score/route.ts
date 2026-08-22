@@ -170,6 +170,34 @@ async function performScoring(
     return;
   }
 
+  // The database enforces its own invariant (trigger enforce_pending_2nd_invariant,
+  // migration 00084): a candidate may only move to 'pending_2nd_interview' when a
+  // completed ai_interviews row scores >= 60 — a HARDCODED floor, independent of
+  // interview_config.pass_threshold used above.
+  //
+  // If those disagree (threshold configured below 60, or a model returning
+  // passed=true under 60), the trigger raises and the ENTIRE update below is
+  // rolled back — losing the score, badge and completed_at as well, not just the
+  // status. The candidate is then stranded: scored in ai_interviews but never
+  // advanced, and the "already scored" guard blocks any retry.
+  //
+  // So only attempt the advance when it satisfies the DB invariant, and log
+  // loudly when the two rules disagree instead of silently losing the writeback.
+  const DB_ADVANCE_FLOOR = 60;
+  const satisfiesDbInvariant = scorecard.overall_score >= DB_ADVANCE_FLOOR;
+
+  if (passed && !satisfiesDbInvariant) {
+    console.error(
+      `[CRITICAL] Pass threshold (${passThreshold}) conflicts with the database ` +
+        `invariant (>= ${DB_ADVANCE_FLOOR}). Candidate ${candidateId} scored ` +
+        `${scorecard.overall_score} and passed by config, but cannot be advanced to ` +
+        `pending_2nd_interview. Scores are still saved; advance manually or raise ` +
+        `interview_config.pass_threshold to ${DB_ADVANCE_FLOOR}.`
+    );
+  }
+
+  const advance = passed && satisfiesDbInvariant;
+
   // Write back to candidates table immediately after ai_interviews update
   const { error: candidateUpdateError } = await supabase
     .from("candidates")
@@ -178,7 +206,11 @@ async function performScoring(
       ai_interview_score: scorecard.overall_score,
       ai_interview_passed: passed,
       ai_interview_completed_at: new Date().toISOString(),
-      admin_status: passed ? "pending_2nd_interview" : "ai_interview_failed",
+      ...(advance
+        ? { admin_status: "pending_2nd_interview" }
+        : passed
+          ? {} // passed by config but below the DB floor — leave status untouched
+          : { admin_status: "ai_interview_failed" }),
       ai_interview_retake_notified_at: null,
     })
     .eq("id", candidateId);
@@ -349,7 +381,12 @@ async function generateScorecard(
   passThreshold: number
 ): Promise<Scorecard> {
   const Anthropic = (await import("@anthropic-ai/sdk")).default;
-  const client = new Anthropic();
+  const client = new Anthropic({
+      // scoring runs in after() inside the same 60s budget, alongside emails + guide. The SDK default is 10 minutes, far beyond the
+      // platform function limit, so a slow call would be killed mid-flight.
+      timeout: 40000,
+      maxRetries: 1,
+    });
 
   const systemPrompt = "You are a scoring engine for StaffVA AI interviews. You will receive a complete interview transcript and must produce a detailed scorecard.\n\nCANDIDATE: " + candidateName + "\nROLE: " + roleCategory + "\nCOUNTRY: " + country + "\nPASS THRESHOLD: " + passThreshold + " out of 100\n\nSCORING RULES:\n- Score each of the 5 dimensions from 0 to 20. Be honest and precise.\n- Overall score = sum of all 5 dimension scores (0-100).\n- Badge levels: 80-100 = exceptional, 60-79 = proficient, 40-59 = developing, below 40 = not_ready\n- passed = true if overall_score >= " + passThreshold + "\n- Each dimension feedback must be 1-2 specific sentences citing actual answers from the transcript.\n- Strengths: 2-3 specific things done well with examples from their answers.\n- Weaknesses: Specific gaps identified with actionable advice.\n- improvement_feedback: For each weak dimension, specific actionable steps to improve.\n- perfect_score_path: What a 100% candidate looks like for this role.\n- ai_notes: Internal observations, flags, inconsistencies, standout moments.\n\nSCORING DIMENSIONS:\n1. technical_knowledge (0-20): Specific, accurate knowledge of role tools, processes, standards.\n2. problem_solving (0-20): Logical thinking, prioritization, sound professional judgment.\n3. communication (0-20): Clear, organized, professional English. Answers the question asked.\n4. experience_depth (0-20): Specific numbers, outcomes, timelines. Real hands-on experience.\n5. professionalism (0-20): Ownership of mistakes, accountability, work ethic.\n\nRespond with ONLY a valid JSON object with these exact keys:\n{\n  \"technical_knowledge_score\": number,\n  \"problem_solving_score\": number,\n  \"communication_score\": number,\n  \"experience_depth_score\": number,\n  \"professionalism_score\": number,\n  \"technical_knowledge_feedback\": \"string\",\n  \"problem_solving_feedback\": \"string\",\n  \"communication_feedback\": \"string\",\n  \"experience_depth_feedback\": \"string\",\n  \"professionalism_feedback\": \"string\",\n  \"strengths\": \"string\",\n  \"weaknesses\": \"string\",\n  \"improvement_feedback\": \"string\",\n  \"perfect_score_path\": \"string\",\n  \"ai_notes\": \"string\"\n}";
 

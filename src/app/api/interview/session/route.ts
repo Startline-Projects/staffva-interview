@@ -192,7 +192,12 @@ async function getClaudeResponse(
 ): Promise<{ text: string; isComplete: boolean }> {
   try {
     const Anthropic = (await import("@anthropic-ai/sdk")).default;
-    const client = new Anthropic();
+    const client = new Anthropic({
+      // conversation turn — must return well inside the route 60s budget. The SDK default is 10 minutes, far beyond the
+      // platform function limit, so a slow call would be killed mid-flight.
+      timeout: 25000,
+      maxRetries: 1,
+    });
 
     // Alex may wrap up after MIN_QUESTIONS; at MAX_QUESTIONS the interview ends
     // regardless of what the model says.
