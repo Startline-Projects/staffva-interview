@@ -194,7 +194,11 @@ async function getClaudeResponse(
     const Anthropic = (await import("@anthropic-ai/sdk")).default;
     const client = new Anthropic();
 
-    const canComplete = questionsAsked >= 8;
+    // Alex may wrap up after MIN_QUESTIONS; at MAX_QUESTIONS the interview ends
+    // regardless of what the model says.
+    const MIN_QUESTIONS = 8;
+    const MAX_QUESTIONS = 15;
+    const canComplete = questionsAsked >= MIN_QUESTIONS;
 
     const retakeNote = attemptNumber > 1 ? "\n\nRETAKE NOTICE: This is attempt number " + attemptNumber + " for this candidate. They have taken this interview before. You MUST ask DIFFERENT questions than a typical first interview. Use alternative question angles, different scenarios, and fresh technical questions. Do not repeat standard opening questions. Vary your approach significantly so the candidate cannot rely on memorized answers from their previous attempt." : "";
 
@@ -234,7 +238,8 @@ async function getClaudeResponse(
     const lower = text.toLowerCase();
     // If the response contains a question mark, Alex is still interviewing — never close when a question is open
     const containsQuestion = text.includes("?");
-    const isComplete = canComplete && !containsQuestion && (
+
+    const saidClosingPhrase =
       lower.includes("concludes our interview") ||
       lower.includes("end of the interview") ||
       lower.includes("that wraps up") ||
@@ -249,9 +254,18 @@ async function getClaudeResponse(
       lower.includes("next few business days") ||
       lower.includes("have a great day") ||
       (lower.includes("goodbye") && lower.includes("thank")) ||
-      (lower.includes("take care") && canComplete && questionsAsked >= 10) ||
-      questionsAsked >= 15
-    );
+      (lower.includes("take care") && questionsAsked >= 10);
+
+    // Hard backstop. This MUST sit outside the !containsQuestion guard: it was
+    // previously inside it, so an interviewer turn that ended in a question
+    // (i.e. most of them) suppressed the cap too and the interview could run
+    // forever — never completing, never scoring, and never redirecting the
+    // candidate. That also made a missing ANTHROPIC_API_KEY unrecoverable,
+    // because the fallback turn ends in "?".
+    const reachedQuestionCap = questionsAsked >= MAX_QUESTIONS;
+
+    const isComplete =
+      reachedQuestionCap || (canComplete && !containsQuestion && saidClosingPhrase);
 
     return { text, isComplete };
   } catch (err) {

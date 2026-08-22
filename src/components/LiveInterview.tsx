@@ -80,8 +80,15 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
     });
   }
 
-  // Transcribe audio using Deepgram server-side
-  async function transcribeAudio(audioBlob: Blob): Promise<string> {
+  // Transcribe audio using Deepgram server-side.
+  // Returns ok:false for a FAILURE (network error, 5xx, token expiry) as
+  // distinct from ok:true with an empty transcript, which means the candidate
+  // genuinely said nothing. Previously both collapsed to "" and were sent to
+  // the interviewer as "[No response detected]", so a transient failure
+  // permanently discarded a real answer and was scored as silence.
+  async function transcribeAudio(
+    audioBlob: Blob
+  ): Promise<{ ok: boolean; transcript: string }> {
     try {
       const formData = new FormData();
       formData.append("audio", audioBlob);
@@ -92,12 +99,12 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         body: formData,
       });
 
-      if (!response.ok) throw new Error("Transcription failed");
+      if (!response.ok) return { ok: false, transcript: "" };
 
       const data = await response.json();
-      return data.transcript || "";
+      return { ok: true, transcript: data.transcript || "" };
     } catch {
-      return "";
+      return { ok: false, transcript: "" };
     }
   }
 
@@ -296,10 +303,30 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         const mimeType = recorder.mimeType || "audio/webm";
         const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
 
-        // Send audio to Deepgram for transcription
-        const transcript = await transcribeAudio(audioBlob);
+        // Send audio to Deepgram for transcription. Retry once on failure —
+        // most failures here are transient, and the candidate's answer is
+        // still in memory, so a retry is free.
+        let result = await transcribeAudio(audioBlob);
+        if (!result.ok) {
+          setStatusText("Still processing your answer...");
+          result = await transcribeAudio(audioBlob);
+        }
+
+        if (!result.ok) {
+          // Transcription is broken, NOT silence. Do not fabricate a
+          // "[No response detected]" turn — that would burn the question and
+          // be scored as though the candidate said nothing. Let them answer
+          // again instead.
+          setStatusText("Sorry — we could not process that answer. Please say it again.");
+          if (mountedRef.current) startListening();
+          resolve();
+          return;
+        }
+
+        const transcript = result.transcript;
 
         if (!transcript || transcript.trim().length === 0) {
+          // Genuine silence — the candidate said nothing audible.
           setStatusText("I did not catch that. Let me move to the next question.");
           await sendResponse("[No response detected]");
         } else {

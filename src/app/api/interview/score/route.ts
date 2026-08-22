@@ -104,14 +104,29 @@ async function performScoring(
     return (e.role === "interviewer" ? "ALEX: " : "CANDIDATE: ") + e.text;
   }).join("\n\n");
 
-  // Generate scorecard via Claude
-  const scorecard = await generateScorecard(
-    candidate?.display_name || "Candidate",
-    candidate?.role_category || (interview.role_category as string),
-    candidate?.country || "Unknown",
-    transcriptText,
-    passThreshold
-  );
+  // Generate scorecard via Claude. Retry once on a malformed/incomplete
+  // response — the parser now throws instead of silently zero-filling, and a
+  // single bad completion used to leave the candidate permanently unscored
+  // because the "already scored" guard blocks any later retry.
+  let scorecard: Scorecard;
+  try {
+    scorecard = await generateScorecard(
+      candidate?.display_name || "Candidate",
+      candidate?.role_category || (interview.role_category as string),
+      candidate?.country || "Unknown",
+      transcriptText,
+      passThreshold
+    );
+  } catch (err) {
+    console.error("Scorecard generation failed, retrying once:", err instanceof Error ? err.message : err);
+    scorecard = await generateScorecard(
+      candidate?.display_name || "Candidate",
+      candidate?.role_category || (interview.role_category as string),
+      candidate?.country || "Unknown",
+      transcriptText,
+      passThreshold
+    );
+  }
 
   // Fail gate: count prior attempts for retake tracking
   const passed = scorecard.passed;
@@ -278,6 +293,54 @@ async function performScoring(
 
 }
 
+const DIMENSION_KEYS = [
+  "technical_knowledge_score",
+  "problem_solving_score",
+  "communication_score",
+  "experience_depth_score",
+  "professionalism_score",
+] as const;
+
+/**
+ * Parse the model's scorecard JSON, failing LOUDLY rather than silently.
+ *
+ * Two problems this replaces:
+ *  - a bare JSON.parse with no try/catch: one malformed or truncated response
+ *    threw, the throw was swallowed by performScoring's caller, and the
+ *    "already scored" guard then blocked any retry — leaving the candidate
+ *    permanently unscored.
+ *  - no shape validation: if the keys were missing or renamed, every
+ *    `scores.X_score || 0` fell back to 0, producing an overall score of 0 and
+ *    auto-sending a rejection email to a candidate who may have done well.
+ *
+ * Throwing here lets the caller retry with a fresh completion instead.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseScorecardJson(raw: string): any {
+  const match = raw.match(/\{[\s\S]*\}/);
+  if (!match) {
+    throw new Error("Scorecard response contained no JSON object");
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let parsed: any;
+  try {
+    parsed = JSON.parse(match[0]);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Scorecard JSON is malformed (likely truncated at max_tokens): ${message}`);
+  }
+
+  const missing = DIMENSION_KEYS.filter((k) => typeof parsed?.[k] !== "number");
+  if (missing.length > 0) {
+    throw new Error(
+      `Scorecard JSON is missing numeric dimension scores: ${missing.join(", ")}`
+    );
+  }
+
+  return parsed;
+}
+
 async function generateScorecard(
   candidateName: string,
   roleCategory: string,
@@ -304,13 +367,7 @@ async function generateScorecard(
     throw new Error("Unexpected response type from Claude");
   }
 
-  let jsonText = content.text;
-  const jsonMatch = jsonText.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    jsonText = jsonMatch[0];
-  }
-
-  const scores = JSON.parse(jsonText);
+  const scores = parseScorecardJson(content.text);
 
   const overallScore =
     (scores.technical_knowledge_score || 0) +
