@@ -14,6 +14,15 @@
     },
     "src/app/api/recruiter/score-second-interview/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/interview/cron/score-pending/route.ts": {
+      "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/interview/cron/score-pending",
+      "schedule": "*/15 * * * *"
+    }
+  ]
 }
