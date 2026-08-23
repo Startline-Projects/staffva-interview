@@ -45,8 +45,12 @@ export async function POST(request: NextRequest) {
     const recruiterName = targetUser.user_metadata?.interview_name || targetUser.user_metadata?.name || "Team member";
     const resend = new Resend(process.env.RESEND_API_KEY);
 
-    // Email to recruiter
-    await resend.emails.send({
+    // resend.emails.send RESOLVES with { data, error } — it does not throw. So
+    // awaiting it without inspecting the result meant a rejected send looked
+    // exactly like a delivered one. The password has already been changed at
+    // this point and this email is the only copy of the new one, so that
+    // silently locked the account holder out for good.
+    const { error: recruiterMailError } = await resend.emails.send({
       from: "StaffVA Interview System <noreply@staffva.com>",
       to: email,
       subject: "Your StaffVA Interview System password has been reset",
@@ -56,7 +60,18 @@ export async function POST(request: NextRequest) {
         "<p>Login at <a href='https://interview.staffva.com/login'>interview.staffva.com/login</a> and change your password immediately from the account menu.</p>",
     });
 
-    // Confirmation email to admin
+    if (recruiterMailError) {
+      return NextResponse.json(
+        {
+          error:
+            "The password was reset, but the email to the account holder could not be sent — they are now locked out. Reset again once email delivery is working.",
+          detail: recruiterMailError.message,
+        },
+        { status: 500 }
+      );
+    }
+
+    // Notification only — non-fatal, and not the only route to the password.
     await resend.emails.send({
       from: "StaffVA Interview System <noreply@staffva.com>",
       to: "sam@glostaffing.com",
