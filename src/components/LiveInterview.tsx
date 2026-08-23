@@ -9,7 +9,34 @@ interface LiveInterviewProps {
   mediaStream: MediaStream;
 }
 
-type InterviewPhase = "starting" | "ai_speaking" | "listening" | "processing" | "complete" | "audio_failed";
+// Client-side deadlines, each a little above the route's own maxDuration
+// (session 60s, tts 30s, transcribe 30s). Without these a fetch could hang
+// indefinitely on a stalled connection, leaving the candidate staring at
+// static text with no spinner and no way forward.
+const SESSION_TIMEOUT_MS = 65_000;
+const TTS_TIMEOUT_MS = 35_000;
+const TRANSCRIBE_TIMEOUT_MS = 35_000;
+
+// A gateway timeout returns an HTML body, so response.json() throws and the
+// real status is lost — which is how a slow server turned into "please reload"
+// with no explanation. Read the status first, and only parse when there is
+// JSON to parse.
+async function readError(response: Response): Promise<string> {
+  if (response.status === 504 || response.status === 502) {
+    return "The interview service took too long to respond.";
+  }
+  if (response.status === 429) {
+    return "Too many requests. Please wait a moment before continuing.";
+  }
+  try {
+    const body = await response.json();
+    return body.error || `Request failed (${response.status})`;
+  } catch {
+    return `Request failed (${response.status})`;
+  }
+}
+
+type InterviewPhase = "starting" | "ai_speaking" | "listening" | "processing" | "complete" | "audio_failed" | "start_failed";
 
 interface ConversationEntry {
   role: "interviewer" | "candidate";
@@ -62,6 +89,7 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token, text }),
+          signal: AbortSignal.timeout(TTS_TIMEOUT_MS),
         });
 
         if (!response.ok) {
@@ -109,6 +137,7 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
       const response = await fetch("/api/interview/transcribe", {
         method: "POST",
         body: formData,
+        signal: AbortSignal.timeout(TRANSCRIBE_TIMEOUT_MS),
       });
 
       // The status matters: a 429 will not clear on a retry, and retrying
@@ -139,11 +168,11 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           interviewId: currentInterviewId,
           transcript,
         }),
+        signal: AbortSignal.timeout(SESSION_TIMEOUT_MS),
       });
 
       if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || "Session error");
+        throw new Error(await readError(response));
       }
 
       const data = await response.json();
@@ -400,11 +429,19 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ token, action: "start" }),
+          signal: AbortSignal.timeout(SESSION_TIMEOUT_MS),
         });
 
         if (!response.ok) {
-          const err = await response.json();
-          setStatusText(err.error || "Failed to start interview");
+          // readError handles the gateway-timeout case, whose body is HTML —
+          // response.json() threw on it, which is how a slow start became the
+          // generic "please reload" with the real reason lost.
+          //
+          // A distinct phase from audio_failed: that one's control resumes
+          // listening, which would be meaningless here because no interview
+          // exists yet.
+          setPhase("start_failed");
+          setStatusText(await readError(response));
           return;
         }
 
@@ -432,8 +469,14 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         }
 
         startListening();
-      } catch {
-        if (mountedRef.current) setStatusText("Failed to start interview. Please reload the page.");
+      } catch (err) {
+        if (!mountedRef.current) return;
+        setPhase("start_failed");
+        setStatusText(
+          err instanceof DOMException && err.name === "TimeoutError"
+            ? "The interview service did not respond in time."
+            : "We could not start your interview."
+        );
       }
     }
 
@@ -475,6 +518,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           )}
           {phase === "audio_failed" && (
             <span className="text-amber-400 text-sm">Audio unavailable</span>
+          )}
+          {phase === "start_failed" && (
+            <span className="text-red-400 text-sm">Could not start</span>
           )}
           {phase === "complete" && (
             <span className="text-green-400 text-sm">Complete</span>
@@ -536,6 +582,15 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
               className="px-10 py-4 bg-amber-600 hover:bg-amber-700 rounded-xl font-semibold text-lg transition-colors"
             >
               I&apos;m Ready
+            </button>
+          )}
+
+          {phase === "start_failed" && (
+            <button
+              onClick={() => window.location.reload()}
+              className="px-10 py-4 bg-amber-600 hover:bg-amber-700 rounded-xl font-semibold text-lg transition-colors"
+            >
+              Retry
             </button>
           )}
 
