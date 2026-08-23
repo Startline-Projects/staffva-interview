@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyInterviewToken } from "@/lib/auth/verify-token";
+import { enforceRateLimit, LIMITS } from "@/lib/rateLimit";
 import { transcribeAudio } from "@/lib/deepgram";
 
 export async function POST(request: NextRequest) {
@@ -17,7 +18,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify auth
-    verifyInterviewToken(token);
+    const payload = verifyInterviewToken(token);
+
+    // Billed per audio minute. The client retries a failed transcription with
+    // the same blob, so this also bounds a retry loop.
+    const limited = await enforceRateLimit(
+      `interview:stt:${payload.candidate_id}`,
+      LIMITS.transcribe
+    );
+    if (limited) return limited;
 
     // Convert File to Buffer
     const arrayBuffer = await audioFile.arrayBuffer();

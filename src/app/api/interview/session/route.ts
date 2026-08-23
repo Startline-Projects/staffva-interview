@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyInterviewToken } from "@/lib/auth/verify-token";
+import { enforceRateLimit, LIMITS } from "@/lib/rateLimit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { isFatalVendorError, recordVendorFailure } from "@/lib/vendorFailure";
 import { v4 as uuidv4 } from "uuid";
@@ -19,6 +20,16 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = verifyInterviewToken(token);
+
+    // Each turn costs an Anthropic call plus, downstream, a synthesis and a
+    // transcription. 60/hr sits far above the 15-question cap while still
+    // bounding a loop.
+    const limited = await enforceRateLimit(
+      `interview:turn:${payload.candidate_id}`,
+      LIMITS.interviewTurn
+    );
+    if (limited) return limited;
+
     const supabase = createSupabaseServiceClient();
 
     const { data: candidate, error: candidateError } = await supabase

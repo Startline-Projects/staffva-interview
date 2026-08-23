@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyInterviewToken } from "@/lib/auth/verify-token";
+import { enforceRateLimit, LIMITS } from "@/lib/rateLimit";
 import { textToSpeechStream } from "@/lib/elevenlabs";
 
 export async function POST(request: NextRequest) {
@@ -15,7 +16,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify the candidate is authenticated
-    verifyInterviewToken(token);
+    const payload = verifyInterviewToken(token);
+
+    // Synthesis is billed per character and is the largest single vendor cost
+    // in the product, so this is the endpoint most worth bounding.
+    const limited = await enforceRateLimit(
+      `interview:tts:${payload.candidate_id}`,
+      LIMITS.tts
+    );
+    if (limited) return limited;
 
     // Convert text to speech
     const audioBuffer = await textToSpeechStream(text, voiceId);

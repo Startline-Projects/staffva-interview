@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import { verifyInterviewToken } from "@/lib/auth/verify-token";
+import { enforceRateLimit, LIMITS } from "@/lib/rateLimit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendCandidateResultsEmail, sendDelegationEmail, sendFailEmail } from "@/lib/emails/send-results";
 import { generateAndSaveGuide } from "@/lib/generate-pre-interview-guide";
@@ -40,6 +41,15 @@ export async function POST(request: NextRequest) {
     }
 
     const payload = verifyInterviewToken(token);
+
+    // Scoring is the largest single Anthropic call in the product (4096 output
+    // tokens). It should run once per interview; the cron sweep may add one.
+    const limited = await enforceRateLimit(
+      `interview:score:${payload.candidate_id}`,
+      LIMITS.score
+    );
+    if (limited) return limited;
+
     const supabase = createSupabaseServiceClient();
 
     // Load interview
