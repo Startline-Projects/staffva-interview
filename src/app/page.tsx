@@ -1,9 +1,7 @@
 import { redirect } from "next/navigation";
-import { generateInterviewToken } from "@/lib/auth/verify-token";
-import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 interface PageProps {
-  searchParams: Promise<{ token?: string; candidate?: string }>;
+  searchParams: Promise<{ token?: string }>;
 }
 
 export default async function Home({ searchParams }: PageProps) {
@@ -14,25 +12,16 @@ export default async function Home({ searchParams }: PageProps) {
     redirect("/interview?token=" + encodeURIComponent(params.token));
   }
 
-  // If a candidate UUID is present (from StaffVA dashboard),
-  // verify the candidate exists, generate a JWT, and redirect
-  if (params.candidate) {
-    const supabase = createSupabaseServiceClient();
-    const { data: candidate } = await supabase
-      .from("candidates")
-      .select("id")
-      .eq("id", params.candidate)
-      .single();
-
-    if (candidate) {
-      const token = generateInterviewToken(candidate.id);
-      redirect("/interview?token=" + encodeURIComponent(token));
-    }
-
-    // Invalid candidate ID — redirect to login with error
-    redirect("/login?error=invalid_candidate");
-  }
-
-  // No token and no candidate — this is a recruiter/admin visiting directly
+  // The ?candidate=<uuid> branch is gone. It minted a valid interview token for
+  // any candidate id, with no session and no ownership check — and candidate
+  // ids are not secret: the public browse policy makes approved candidates
+  // readable by anon. So anyone could mint a token and drive the interview
+  // endpoints, which each cost an Anthropic call, an ElevenLabs synthesis and a
+  // Deepgram transcription. It also meant the per-candidate rate limits bounded
+  // nothing in aggregate, since an attacker could simply pick a new id.
+  //
+  // The platform now mints the token itself, where the session already proves
+  // the caller owns the profile, and links here with ?token= — the same path
+  // the candidate dashboard already used.
   redirect("/login");
 }

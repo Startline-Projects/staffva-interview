@@ -5,7 +5,11 @@ import { textToSpeechStream } from "@/lib/elevenlabs";
 
 export async function POST(request: NextRequest) {
   try {
-    const { token, text, voiceId } = await request.json();
+    // voiceId is deliberately NOT read from the request. It was interpolated
+    // straight into the ElevenLabs URL path, and no caller has ever set it —
+    // every client uses the default voice. Accepting it was an unnecessary
+    // path-injection surface on a paid vendor call.
+    const { token, text } = await request.json();
 
     if (!token) {
       return NextResponse.json({ error: "Missing token" }, { status: 400 });
@@ -13,6 +17,17 @@ export async function POST(request: NextRequest) {
 
     if (!text) {
       return NextResponse.json({ error: "Missing text" }, { status: 400 });
+    }
+
+    // Synthesis is billed per character, so the request must not be able to
+    // choose the size of the bill. Real interviewer turns average 331
+    // characters, so this is roughly 6x headroom over anything legitimate.
+    const MAX_TTS_CHARS = 2000;
+    if (typeof text !== "string" || text.length > MAX_TTS_CHARS) {
+      return NextResponse.json(
+        { error: `text must be a string of at most ${MAX_TTS_CHARS} characters` },
+        { status: 400 }
+      );
     }
 
     // Verify the candidate is authenticated
@@ -27,7 +42,7 @@ export async function POST(request: NextRequest) {
     if (limited) return limited;
 
     // Convert text to speech
-    const audioBuffer = await textToSpeechStream(text, voiceId);
+    const audioBuffer = await textToSpeechStream(text);
 
     // Return audio as binary response
     return new NextResponse(audioBuffer, {

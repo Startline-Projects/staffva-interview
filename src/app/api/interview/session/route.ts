@@ -50,6 +50,18 @@ export async function POST(request: NextRequest) {
       if (!interviewId || !transcript) {
         return NextResponse.json({ error: "Missing interviewId or transcript" }, { status: 400 });
       }
+
+      // The transcript is appended to the conversation and the WHOLE
+      // conversation is re-sent to Anthropic on every subsequent turn, so an
+      // oversized answer is billed once per remaining question, not once.
+      // Real candidate answers average 387 characters.
+      const MAX_TRANSCRIPT_CHARS = 5000;
+      if (typeof transcript !== "string" || transcript.length > MAX_TRANSCRIPT_CHARS) {
+        return NextResponse.json(
+          { error: `transcript must be a string of at most ${MAX_TRANSCRIPT_CHARS} characters` },
+          { status: 400 }
+        );
+      }
       return await handleRespond(supabase, candidate, interviewId, transcript);
     }
 

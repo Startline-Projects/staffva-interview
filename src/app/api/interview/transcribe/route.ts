@@ -17,6 +17,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Missing audio" }, { status: 400 });
     }
 
+    // Billed per audio minute. The client records at most 45 seconds per answer
+    // (HARD_TIMEOUT in LiveInterview), which is well under a megabyte of opus,
+    // so this bounds the bill without touching any real recording.
+    const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
+    if (audioFile.size > MAX_AUDIO_BYTES) {
+      return NextResponse.json(
+        { error: "Audio file is too large" },
+        { status: 413 }
+      );
+    }
+
     // Verify auth
     const payload = verifyInterviewToken(token);
 
