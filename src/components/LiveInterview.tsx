@@ -26,7 +26,20 @@ async function readError(response: Response): Promise<string> {
     return "The interview service took too long to respond.";
   }
   if (response.status === 429) {
-    return "Too many requests. Please wait a moment before continuing.";
+    // The server computes the true seconds until the window resets and sends
+    // it both ways. Telling the candidate to "wait a moment" when it is
+    // actually forty minutes is what makes them reload in a loop.
+    try {
+      const body = await response.json();
+      const seconds = Number(body.retryAfterSeconds ?? response.headers.get("Retry-After"));
+      if (Number.isFinite(seconds) && seconds > 0) {
+        const minutes = Math.ceil(seconds / 60);
+        return `You have reached the limit for this hour. Your progress is saved — please come back in about ${minutes} minute${minutes === 1 ? "" : "s"} and resume.`;
+      }
+    } catch {
+      // fall through to the generic message
+    }
+    return "Too many requests. Please wait a few minutes before continuing.";
   }
   try {
     const body = await response.json();
@@ -36,7 +49,7 @@ async function readError(response: Response): Promise<string> {
   }
 }
 
-type InterviewPhase = "starting" | "ai_speaking" | "listening" | "processing" | "complete" | "audio_failed" | "start_failed";
+type InterviewPhase = "starting" | "ai_speaking" | "listening" | "processing" | "complete" | "audio_failed" | "start_failed" | "interrupted";
 
 interface ConversationEntry {
   role: "interviewer" | "candidate";
@@ -61,6 +74,10 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
   // Bounds the re-record loop. Without it, a persistently failing transcription
   // sends the candidate round the same answer indefinitely with no exit.
   const consecutiveFailuresRef = useRef(0);
+  // A 403 (retake gate) or 404 cannot be retried — reloading only makes the
+  // candidate redo the microphone grant and the audio test to get the same
+  // answer, for up to three days.
+  const startFailStatusRef = useRef<number | null>(null);
 
   // Voice Activity Detection refs
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -172,7 +189,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
       });
 
       if (!response.ok) {
-        throw new Error(await readError(response));
+        const failure = new Error(await readError(response)) as Error & { status?: number };
+        failure.status = response.status;
+        throw failure;
       }
 
       const data = await response.json();
@@ -225,7 +244,38 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
       }
     } catch (err) {
       console.error("sendResponse error:", err);
-      setStatusText("Something went wrong. Trying to continue...");
+      if (!mountedRef.current) return;
+
+      const status = (err as { status?: number }).status;
+      const message = err instanceof Error ? err.message : "Something went wrong.";
+
+      // The interview is already finished server-side. Re-recording can never
+      // succeed; send them to their results, which the scoring sweep will fill.
+      if (status === 400 && interviewIdRef.current) {
+        window.location.href =
+          "/interview/results?id=" + interviewIdRef.current + "&token=" + token;
+        return;
+      }
+
+      // 429 (hourly limit) and 503 (the fatal-vendor stop) are both real stops.
+      // Re-recording through them burns paid transcription for nothing — which
+      // is exactly what the 503 path was added to prevent, and the client was
+      // undoing it.
+      if (status === 429 || status === 503 || status === 403 || status === 404) {
+        setPhase("interrupted");
+        setStatusText(message);
+        return;
+      }
+
+      // Genuinely transient: retry, but bounded.
+      consecutiveFailuresRef.current += 1;
+      if (consecutiveFailuresRef.current >= 3) {
+        setPhase("interrupted");
+        setStatusText(message + " Your progress is saved — press Resume to continue.");
+        return;
+      }
+
+      setStatusText(message + " Trying to continue...");
       setTimeout(() => {
         if (mountedRef.current) startListening();
       }, 2000);
@@ -373,8 +423,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           if (result.status === 429) {
             // Re-recording here would spin until the top of the hour with no
             // way out and no explanation. Stop and tell them the truth.
+            setPhase("interrupted");
             setStatusText(
-              "You have reached the limit for this hour. Your progress is saved — please come back shortly and resume."
+              "You have reached the limit for this hour. Your progress is saved — press Resume to continue."
             );
             resolve();
             return;
@@ -384,8 +435,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           // persistently failing upstream cannot re-record indefinitely.
           consecutiveFailuresRef.current += 1;
           if (consecutiveFailuresRef.current >= 3) {
+            setPhase("interrupted");
             setStatusText(
-              "We are having trouble processing audio right now. Your progress is saved — please come back shortly and resume."
+              "We are having trouble processing audio right now. Your progress is saved — press Resume to continue."
             );
             resolve();
             return;
@@ -440,6 +492,7 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           // A distinct phase from audio_failed: that one's control resumes
           // listening, which would be meaningless here because no interview
           // exists yet.
+          startFailStatusRef.current = response.status;
           setPhase("start_failed");
           setStatusText(await readError(response));
           return;
@@ -471,6 +524,7 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         startListening();
       } catch (err) {
         if (!mountedRef.current) return;
+        startFailStatusRef.current = null; // network/timeout — retryable
         setPhase("start_failed");
         setStatusText(
           err instanceof DOMException && err.name === "TimeoutError"
@@ -521,6 +575,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           )}
           {phase === "start_failed" && (
             <span className="text-red-400 text-sm">Could not start</span>
+          )}
+          {phase === "interrupted" && (
+            <span className="text-amber-400 text-sm">Paused</span>
           )}
           {phase === "complete" && (
             <span className="text-green-400 text-sm">Complete</span>
@@ -585,12 +642,33 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
             </button>
           )}
 
-          {phase === "start_failed" && (
+          {phase === "start_failed" &&
+            startFailStatusRef.current !== 403 &&
+            startFailStatusRef.current !== 404 && (
+              <button
+                onClick={() => window.location.reload()}
+                className="px-10 py-4 bg-amber-600 hover:bg-amber-700 rounded-xl font-semibold text-lg transition-colors"
+              >
+                Retry
+              </button>
+            )}
+
+          {phase === "start_failed" &&
+            (startFailStatusRef.current === 403 || startFailStatusRef.current === 404) && (
+              <a
+                href="https://staffva.com/candidate/dashboard"
+                className="inline-block px-10 py-4 bg-gray-700 hover:bg-gray-600 rounded-xl font-semibold text-lg transition-colors"
+              >
+                Back to StaffVA
+              </a>
+            )}
+
+          {phase === "interrupted" && (
             <button
               onClick={() => window.location.reload()}
               className="px-10 py-4 bg-amber-600 hover:bg-amber-700 rounded-xl font-semibold text-lg transition-colors"
             >
-              Retry
+              Resume Interview
             </button>
           )}
 
