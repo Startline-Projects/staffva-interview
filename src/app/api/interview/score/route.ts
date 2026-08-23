@@ -428,8 +428,18 @@ async function generateScorecard(
   const client = new Anthropic({
       // scoring runs in after() inside the same 60s budget, alongside emails + guide. The SDK default is 10 minutes, far beyond the
       // platform function limit, so a slow call would be killed mid-flight.
-      timeout: 40000,
-      maxRetries: 1,
+      // Budgeted to fit inside maxDuration 60. generateScorecard is called
+      // twice (an app-level retry at :166), so the SDK's own retry made the
+      // worst case 40s x 2 attempts x 2 calls = 160s inside a 60s function —
+      // even a SINGLE slow call at 80s overran it. The function was then
+      // killed mid-scoring and the interview stayed completed-but-unscored,
+      // which is exactly the state the health alerter is currently reporting.
+      //
+      // 20s x 1 attempt x 2 calls = 40s worst case, leaving 20s for the
+      // database writes and the emails that follow. Retry stays at the app
+      // level, where it already exists.
+      timeout: 20000,
+      maxRetries: 0,
     });
 
   const systemPrompt = "You are a scoring engine for StaffVA AI interviews. You will receive a complete interview transcript and must produce a detailed scorecard.\n\nCANDIDATE: " + candidateName + "\nROLE: " + roleCategory + "\nCOUNTRY: " + country + "\nPASS THRESHOLD: " + passThreshold + " out of 100\n\nSCORING RULES:\n- Score each of the 5 dimensions from 0 to 20. Be honest and precise.\n- Overall score = sum of all 5 dimension scores (0-100).\n- Badge levels: 80-100 = exceptional, 60-79 = proficient, 40-59 = developing, below 40 = not_ready\n- passed = true if overall_score >= " + passThreshold + "\n- Each dimension feedback must be 1-2 specific sentences citing actual answers from the transcript.\n- Strengths: 2-3 specific things done well with examples from their answers.\n- Weaknesses: Specific gaps identified with actionable advice.\n- improvement_feedback: For each weak dimension, specific actionable steps to improve.\n- perfect_score_path: What a 100% candidate looks like for this role.\n- ai_notes: Internal observations, flags, inconsistencies, standout moments.\n\nSCORING DIMENSIONS:\n1. technical_knowledge (0-20): Specific, accurate knowledge of role tools, processes, standards.\n2. problem_solving (0-20): Logical thinking, prioritization, sound professional judgment.\n3. communication (0-20): Clear, organized, professional English. Answers the question asked.\n4. experience_depth (0-20): Specific numbers, outcomes, timelines. Real hands-on experience.\n5. professionalism (0-20): Ownership of mistakes, accountability, work ethic.\n\nRespond with ONLY a valid JSON object with these exact keys:\n{\n  \"technical_knowledge_score\": number,\n  \"problem_solving_score\": number,\n  \"communication_score\": number,\n  \"experience_depth_score\": number,\n  \"professionalism_score\": number,\n  \"technical_knowledge_feedback\": \"string\",\n  \"problem_solving_feedback\": \"string\",\n  \"communication_feedback\": \"string\",\n  \"experience_depth_feedback\": \"string\",\n  \"professionalism_feedback\": \"string\",\n  \"strengths\": \"string\",\n  \"weaknesses\": \"string\",\n  \"improvement_feedback\": \"string\",\n  \"perfect_score_path\": \"string\",\n  \"ai_notes\": \"string\"\n}";

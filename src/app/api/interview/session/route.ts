@@ -277,8 +277,13 @@ async function getClaudeResponse(
     const client = new Anthropic({
       // conversation turn — must return well inside the route 60s budget. The SDK default is 10 minutes, far beyond the
       // platform function limit, so a slow call would be killed mid-flight.
+      // 25s x 2 attempts left only ~8s of the 60s budget for the database
+      // work either side, and a function killed there loses the turn. One
+      // attempt leaves 33s of headroom; a transient failure already has a
+      // recovery path — the candidate is asked to repeat their answer, and
+      // the answer itself is now persisted before this call.
       timeout: 25000,
-      maxRetries: 1,
+      maxRetries: 0,
     });
 
     // Alex may wrap up after MIN_QUESTIONS; at MAX_QUESTIONS the interview ends
