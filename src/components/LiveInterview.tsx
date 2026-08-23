@@ -31,6 +31,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
   const conversationEndRef = useRef<HTMLDivElement | null>(null);
   const isRecordingRef = useRef(false);
   const mountedRef = useRef(true);
+  // Bounds the re-record loop. Without it, a persistently failing transcription
+  // sends the candidate round the same answer indefinitely with no exit.
+  const consecutiveFailuresRef = useRef(0);
 
   // Voice Activity Detection refs
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -88,7 +91,7 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
   // permanently discarded a real answer and was scored as silence.
   async function transcribeAudio(
     audioBlob: Blob
-  ): Promise<{ ok: boolean; transcript: string }> {
+  ): Promise<{ ok: boolean; transcript: string; status?: number }> {
     try {
       const formData = new FormData();
       formData.append("audio", audioBlob);
@@ -99,7 +102,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         body: formData,
       });
 
-      if (!response.ok) return { ok: false, transcript: "" };
+      // The status matters: a 429 will not clear on a retry, and retrying
+      // it is what turns a brief limit into a loop the candidate cannot exit.
+      if (!response.ok) return { ok: false, transcript: "", status: response.status };
 
       const data = await response.json();
       return { ok: true, transcript: data.transcript || "" };
@@ -307,7 +312,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         // most failures here are transient, and the candidate's answer is
         // still in memory, so a retry is free.
         let result = await transcribeAudio(audioBlob);
-        if (!result.ok) {
+        // Never retry a 429 — it will not clear, and the retry is what spends
+        // the remaining budget.
+        if (!result.ok && result.status !== 429) {
           setStatusText("Still processing your answer...");
           result = await transcribeAudio(audioBlob);
         }
@@ -315,13 +322,35 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         if (!result.ok) {
           // Transcription is broken, NOT silence. Do not fabricate a
           // "[No response detected]" turn — that would burn the question and
-          // be scored as though the candidate said nothing. Let them answer
-          // again instead.
+          // be scored as though the candidate said nothing.
+          if (result.status === 429) {
+            // Re-recording here would spin until the top of the hour with no
+            // way out and no explanation. Stop and tell them the truth.
+            setStatusText(
+              "You have reached the limit for this hour. Your progress is saved — please come back shortly and resume."
+            );
+            resolve();
+            return;
+          }
+
+          // Bound the loop even for genuinely transient failures, so a
+          // persistently failing upstream cannot re-record indefinitely.
+          consecutiveFailuresRef.current += 1;
+          if (consecutiveFailuresRef.current >= 3) {
+            setStatusText(
+              "We are having trouble processing audio right now. Your progress is saved — please come back shortly and resume."
+            );
+            resolve();
+            return;
+          }
+
           setStatusText("Sorry — we could not process that answer. Please say it again.");
           if (mountedRef.current) startListening();
           resolve();
           return;
         }
+
+        consecutiveFailuresRef.current = 0;
 
         const transcript = result.transcript;
 
