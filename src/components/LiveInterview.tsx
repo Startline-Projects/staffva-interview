@@ -9,7 +9,7 @@ interface LiveInterviewProps {
   mediaStream: MediaStream;
 }
 
-type InterviewPhase = "starting" | "ai_speaking" | "listening" | "processing" | "complete";
+type InterviewPhase = "starting" | "ai_speaking" | "listening" | "processing" | "complete" | "audio_failed";
 
 interface ConversationEntry {
   role: "interviewer" | "candidate";
@@ -47,8 +47,16 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
   }, [conversation, currentTranscript]);
 
   // Play AI audio from the TTS endpoint
-  async function playAIAudio(text: string): Promise<void> {
-    return new Promise(async (resolve, reject) => {
+  // Resolves true only if the candidate actually HEARD the question.
+  //
+  // Every failure path used to resolve silently, and the caller then opened the
+  // microphone on a 4.5-second fuse. Measured consequence: 29.1% of candidates
+  // had their FIRST answer recorded as "[No response detected]" — decaying to
+  // 5.7% by turn four, which is the signature of people not being ready rather
+  // than a vendor outage. Those turns are scored as though the candidate said
+  // nothing, and interviews with three or more of them average 15 points lower.
+  async function playAIAudio(text: string): Promise<boolean> {
+    return new Promise(async (resolve) => {
       try {
         const response = await fetch("/api/interview/tts", {
           method: "POST",
@@ -57,9 +65,8 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         });
 
         if (!response.ok) {
-          // If TTS fails, skip audio and continue
           console.error("TTS failed, skipping audio");
-          resolve();
+          resolve(false);
           return;
         }
 
@@ -69,16 +76,18 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
 
         audio.onended = () => {
           URL.revokeObjectURL(audioUrl);
-          resolve();
+          resolve(true);
         };
         audio.onerror = () => {
           URL.revokeObjectURL(audioUrl);
-          resolve(); // Don't reject — just skip audio
+          resolve(false);
         };
 
+        // Rejects under browser autoplay policy when user activation has been
+        // lost across the awaits — a real and silent cause of the above.
         await audio.play();
       } catch {
-        resolve(); // Don't block the flow if audio fails
+        resolve(false);
       }
     });
   }
@@ -171,10 +180,19 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         // Play AI response then start listening again
         setPhase("ai_speaking");
         setStatusText("Alex is speaking...");
-        await playAIAudio(data.response);
-        if (mountedRef.current) {
-          startListening();
+        const heard = await playAIAudio(data.response);
+
+        if (!mountedRef.current) return;
+
+        if (!heard) {
+          setPhase("audio_failed");
+          setStatusText(
+            "We could not play the audio. Please read Alex's question above, then press I'm Ready to answer."
+          );
+          return;
         }
+
+        startListening();
       }
     } catch (err) {
       console.error("sendResponse error:", err);
@@ -399,11 +417,21 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         // Play Alex's opening message
         setPhase("ai_speaking");
         setStatusText("Alex is speaking...");
-        await playAIAudio(data.response);
+        const heard = await playAIAudio(data.response);
 
-        if (mountedRef.current) {
-          startListening();
+        if (!mountedRef.current) return;
+
+        if (!heard) {
+          // Do not open the microphone on a timer they cannot hear. The
+          // question is already on screen; let them read it and say when ready.
+          setPhase("audio_failed");
+          setStatusText(
+            "We could not play the audio. Please read Alex's question above, then press I'm Ready to answer."
+          );
+          return;
         }
+
+        startListening();
       } catch {
         if (mountedRef.current) setStatusText("Failed to start interview. Please reload the page.");
       }
@@ -444,6 +472,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           )}
           {phase === "processing" && (
             <span className="text-blue-400 text-sm">Processing...</span>
+          )}
+          {phase === "audio_failed" && (
+            <span className="text-amber-400 text-sm">Audio unavailable</span>
           )}
           {phase === "complete" && (
             <span className="text-green-400 text-sm">Complete</span>
@@ -496,6 +527,15 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
               className="px-10 py-4 bg-amber-600 hover:bg-amber-700 rounded-xl font-semibold text-lg transition-colors"
             >
               Done
+            </button>
+          )}
+
+          {phase === "audio_failed" && (
+            <button
+              onClick={startListening}
+              className="px-10 py-4 bg-amber-600 hover:bg-amber-700 rounded-xl font-semibold text-lg transition-colors"
+            >
+              I&apos;m Ready
             </button>
           )}
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import { verifyInterviewToken } from "@/lib/auth/verify-token";
 import { enforceRateLimit, LIMITS } from "@/lib/rateLimit";
+import { recordVendorFailure } from "@/lib/vendorFailure";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendCandidateResultsEmail, sendDelegationEmail, sendFailEmail } from "@/lib/emails/send-results";
 import { generateAndSaveGuide } from "@/lib/generate-pre-interview-guide";
@@ -91,6 +92,39 @@ async function performScoring(
   candidateId: string
 ) {
   const supabase = createSupabaseServiceClient();
+
+  // Refuse to score an interview that is mostly silence.
+  //
+  // "[No response detected]" is what the client sends when transcription
+  // returns nothing — including when the candidate never heard the question,
+  // which measurably happened to 29.1% of candidates on their very first turn.
+  // Scoring that transcript rejects them for a fault that was ours, sets
+  // admin_status to ai_interview_failed and arms a three-day lockout. Park it
+  // for a human instead: no score, no email, no rejection, no lockout.
+  const transcriptEntries = Array.isArray(interview.transcript)
+    ? (interview.transcript as { role?: string; text?: string }[])
+    : [];
+  const candidateTurns = transcriptEntries.filter((e) => e.role === "candidate");
+  const silentTurns = candidateTurns.filter((e) => e.text === "[No response detected]");
+
+  if (candidateTurns.length > 0 && silentTurns.length * 2 >= candidateTurns.length) {
+    await supabase
+      .from("ai_interviews")
+      .update({ status: "failed_technical" })
+      .eq("id", interview.id as string);
+
+    await recordVendorFailure({
+      vendor: "elevenlabs",
+      operation: "interview.score.mostlySilent",
+      error: new Error(
+        `${silentTurns.length} of ${candidateTurns.length} answers were silent — not scored`
+      ),
+      fatal: false,
+      context: { interviewId: interview.id, candidateId },
+    });
+
+    return;
+  }
 
   // Load candidate
   const { data: candidate } = await supabase

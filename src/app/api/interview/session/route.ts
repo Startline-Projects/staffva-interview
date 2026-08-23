@@ -148,6 +148,13 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
     candidate_id: candidate.id,
     attempt_number: attemptNumber,
     ai_interview_id: interviewId,
+    // Explicitly null. The column defaults to now() + 3 days, and this row is
+    // written when the interview STARTS — so merely beginning an interview
+    // armed a three-day lockout. A candidate whose interview then broke was
+    // refused a retry by handleStart's own gate, with nothing to appeal to.
+    // The retake window is set on failure, by the scoring route, which is the
+    // only place that knows whether one is warranted.
+    next_retake_available_at: null,
   });
 
   return NextResponse.json({
@@ -177,6 +184,18 @@ async function handleRespond(supabase: any, candidate: Record<string, unknown>, 
   const conversation: ConversationEntry[] = [...(interview.transcript || [])];
   conversation.push({ role: "candidate", text: transcript });
 
+  // Persist the answer NOW, before the model call. The Anthropic client allows
+  // 25s with one retry, so the call alone can consume most of this route's 60s
+  // budget — and the only other write happens after it returns. A function
+  // killed at maxDuration therefore erased an answer the candidate had already
+  // given and could not give again, since the client never re-sends. Writing
+  // the question costs a second UPDATE; losing the answer costs the candidate
+  // a question they are scored on.
+  await supabase
+    .from("ai_interviews")
+    .update({ transcript: conversation })
+    .eq("id", interviewId);
+
   const questionsAsked = conversation.filter((e: ConversationEntry) => e.role === "interviewer").length;
 
   // Get attempt number for retake awareness
@@ -194,12 +213,29 @@ async function handleRespond(supabase: any, candidate: Record<string, unknown>, 
     // getClaudeResponse only rethrows configuration failures — a retired model
     // id, a revoked key. Every candidate is hitting this, so stop the interview
     // here instead of burning fifteen turns of paid speech synthesis and
-    // transcription to build a transcript that cannot be scored. The candidate's
-    // answers so far are preserved and the attempt is left resumable.
-    await supabase
+    // transcription to build a transcript that cannot be scored.
+    //
+    // status stays 'in_progress' deliberately. An earlier version of this block
+    // wrote 'error', which is not in ai_interviews_status_check
+    // ('in_progress' | 'completed' | 'failed_technical') — so Postgres rejected
+    // the whole UPDATE, the result was never checked, and the transcript in the
+    // same statement was discarded too. The comment claimed the answers were
+    // saved; they were not. Leaving the row 'in_progress' is also what lets
+    // handleStart resume it, which 'failed_technical' would not.
+    const { error: saveError } = await supabase
       .from("ai_interviews")
-      .update({ transcript: conversation, status: "error" })
+      .update({ transcript: conversation })
       .eq("id", interviewId);
+
+    if (saveError) {
+      await recordVendorFailure({
+        vendor: "anthropic",
+        operation: "interview.session.saveOnFatal",
+        error: saveError,
+        fatal: true,
+        context: { interviewId },
+      });
+    }
 
     return NextResponse.json(
       {
