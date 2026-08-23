@@ -326,12 +326,21 @@ async function getClaudeResponse(
     const response = await client.messages.create({
       model: "claude-sonnet-5",
       max_tokens: 1024,
+      // Thinking off for the live conversational turn. max_tokens caps thinking
+      // AND text together, so adaptive thinking would eat the budget for Alex's
+      // spoken reply — and this turn is latency-critical: the candidate is
+      // waiting in silence. The scoring path disables it too — the rationale is
+      // argued in full in interview/score/route.ts. Sonnet 5 accepts an
+      // explicit disable.
+      thinking: { type: "disabled" },
       system: systemPrompt,
       messages,
     });
 
-    const content = response.content[0];
-    if (content.type !== "text") {
+    // Select the TEXT block rather than assuming index 0 — see the thinking
+    // note above; a thinking block can arrive first with empty text.
+    const content = response.content.find((b) => b.type === "text");
+    if (!content) {
       return { text: "I apologize, let me rephrase. Could you repeat your last answer?", isComplete: false };
     }
 

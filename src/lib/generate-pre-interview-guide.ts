@@ -84,14 +84,20 @@ export async function generatePreInterviewGuide(
 
   const response = await client.messages.create({
     model: "claude-sonnet-5",
-    max_tokens: 2048,
+    // Thinking off — see the note in interview/score. This call is launched
+    // un-awaited inside that route's after(), so it is already racing function
+    // shutdown; adaptive thinking would make it lose that race routinely.
+    thinking: { type: "disabled" },
+    // Raised from 2048 for Sonnet 5's denser tokenizer; the guide runs ~1,100.
+    max_tokens: 4000,
     system: systemPrompt,
     messages: [{ role: "user", content: userMessage }],
   });
 
-  const content = response.content[0];
-  if (content.type !== "text") {
-    throw new Error("Unexpected response type from Claude");
+  // Select the TEXT block — a thinking block can arrive first on Sonnet 5.
+  const content = response.content.find((b) => b.type === "text");
+  if (!content) {
+    throw new Error("Claude returned no text block");
   }
 
   return content.text;

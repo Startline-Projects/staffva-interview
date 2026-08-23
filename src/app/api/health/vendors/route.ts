@@ -64,6 +64,13 @@ async function checkAnthropic(): Promise<string> {
   const model = "claude-sonnet-5";
   const res = await client.messages.create({
     model,
+    // Same reason as the model id: the probe has to send the shape production
+    // sends, or it validates something nobody runs. Every interview call site
+    // sets this explicitly, so this one does too — otherwise a rejection of
+    // thinking:{type:"disabled"} would break every interview while the health
+    // check stayed green. Omitting it here would also leave adaptive thinking
+    // ON against max_tokens: 1, which cannot fit a thinking block.
+    thinking: { type: "disabled" },
     max_tokens: 1,
     messages: [{ role: "user", content: "ok" }],
   });

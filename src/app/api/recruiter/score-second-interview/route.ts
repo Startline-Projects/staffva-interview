@@ -172,7 +172,15 @@ async function scoreSecondInterview(
   transcript: string
 ): Promise<SecondInterviewScores> {
   const Anthropic = (await import("@anthropic-ai/sdk")).default;
-  const client = new Anthropic();
+  // This client was constructed bare, so it inherited the SDK defaults: a TEN
+  // MINUTE timeout and 2 retries, inside a function capped at maxDuration 60.
+  // A slow call could not possibly return — the platform killed the function
+  // long before the SDK gave up, and the recruiter saw a dead request with no
+  // error. One call, synchronous, so it gets most of the 60s window.
+  const client = new Anthropic({
+    timeout: 45000,
+    maxRetries: 0,
+  });
 
   const systemPrompt = `You are scoring a second human interview for a professional offshore talent marketplace. You will receive the candidate's first interview scorecard and a transcript of their second interview conducted by a human recruiter. Score the second interview on the same five dimensions as the first. Weight experience depth and professionalism higher in the second interview because the first interview already tested technical knowledge. Return ONLY valid JSON — no markdown, no preamble, no explanation outside the JSON.`;
 
@@ -228,14 +236,22 @@ Return exactly this JSON structure and nothing else:
 
   const response = await client.messages.create({
     model: "claude-sonnet-5",
-    max_tokens: 4096,
+    // Thinking off — see the note in interview/score.
+    thinking: { type: "disabled" },
+    max_tokens: 8000,
     system: systemPrompt,
     messages: [{ role: "user", content: userMessage }],
   });
 
-  const content = response.content[0];
-  if (content.type !== "text") {
-    throw new Error("Unexpected response type from Claude");
+  // A truncation must surface as a truncation, not as a JSON.parse SyntaxError.
+  if (response.stop_reason === "max_tokens") {
+    throw new Error("Scorecard was truncated at max_tokens before the JSON closed");
+  }
+
+  // Select the TEXT block — a thinking block can arrive first on Sonnet 5.
+  const content = response.content.find((b) => b.type === "text");
+  if (!content) {
+    throw new Error("Claude returned no text block");
   }
 
   let jsonText = content.text;

@@ -459,16 +459,39 @@ async function generateScorecard(
 
   const response = await client.messages.create({
     model: "claude-sonnet-5",
-    max_tokens: 4096,
+    // Thinking off, deliberately. On Sonnet 5 adaptive thinking runs by DEFAULT
+    // when this parameter is omitted (Sonnet 4 ran it off), and max_tokens caps
+    // thinking and text TOGETHER — so the swap in 7c77555 silently gave part of
+    // this budget to reasoning and started returning a thinking block first.
+    //
+    // Turning it off rather than budgeting for it, for two reasons:
+    //   1. Latency. This runs in after() inside maxDuration 60, twice, behind a
+    //      20s client timeout (see above). Adaptive thinking does not fit, and
+    //      an unscored interview is a candidate who never gets a result.
+    //   2. Consistency. 253 scorecards already exist, all scored without
+    //      thinking. Enabling it shifts the score distribution mid-cohort —
+    //      that is a rubric change, and it is not one this fix should smuggle in.
+    thinking: { type: "disabled" },
+    // 8000 is ~4x the ~2k tokens this JSON actually needs, which covers Sonnet
+    // 5's denser tokenizer without inviting a longer completion.
+    max_tokens: 8000,
     system: systemPrompt,
     messages: [
       { role: "user", content: "Score this interview transcript:\n\n" + transcriptText },
     ],
   });
 
-  const content = response.content[0];
-  if (content.type !== "text") {
-    throw new Error("Unexpected response type from Claude");
+  // A truncation must be reported as a truncation, not misdiagnosed by the
+  // JSON parser as a malformed completion.
+  if (response.stop_reason === "max_tokens") {
+    throw new Error("Scorecard was truncated at max_tokens before the JSON closed");
+  }
+
+  // Select the TEXT block rather than assuming index 0 — on Sonnet 5 a thinking
+  // block can arrive first, with empty text.
+  const content = response.content.find((b) => b.type === "text");
+  if (!content) {
+    throw new Error("Claude returned no text block");
   }
 
   const scores = parseScorecardJson(content.text);
