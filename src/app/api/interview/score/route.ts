@@ -93,38 +93,16 @@ async function performScoring(
 ) {
   const supabase = createSupabaseServiceClient();
 
-  // Refuse to score an interview that is mostly silence.
-  //
+  // How much of this transcript is our silence rather than their answer?
   // "[No response detected]" is what the client sends when transcription
   // returns nothing — including when the candidate never heard the question,
-  // which measurably happened to 29.1% of candidates on their very first turn.
-  // Scoring that transcript rejects them for a fault that was ours, sets
-  // admin_status to ai_interview_failed and arms a three-day lockout. Park it
-  // for a human instead: no score, no email, no rejection, no lockout.
+  // which measurably happened to 29.1% of candidates on their first turn.
+  // Used below to decide whether a FAILING score is safe to act on.
   const transcriptEntries = Array.isArray(interview.transcript)
     ? (interview.transcript as { role?: string; text?: string }[])
     : [];
   const candidateTurns = transcriptEntries.filter((e) => e.role === "candidate");
   const silentTurns = candidateTurns.filter((e) => e.text === "[No response detected]");
-
-  if (candidateTurns.length > 0 && silentTurns.length * 2 >= candidateTurns.length) {
-    await supabase
-      .from("ai_interviews")
-      .update({ status: "failed_technical" })
-      .eq("id", interview.id as string);
-
-    await recordVendorFailure({
-      vendor: "elevenlabs",
-      operation: "interview.score.mostlySilent",
-      error: new Error(
-        `${silentTurns.length} of ${candidateTurns.length} answers were silent — not scored`
-      ),
-      fatal: false,
-      context: { interviewId: interview.id, candidateId },
-    });
-
-    return;
-  }
 
   // Load candidate
   const { data: candidate } = await supabase
@@ -238,6 +216,41 @@ async function performScoring(
         `pending_2nd_interview. Scores are still saved; advance manually or raise ` +
         `interview_config.pass_threshold to ${DB_ADVANCE_FLOOR}.`
     );
+  }
+
+  // Do not reject a candidate on a transcript that is substantially our own
+  // silence. Checked here rather than before scoring, for three reasons: the
+  // score is still computed and kept, a PASSING candidate is never parked, and
+  // it is the rejection — not the scoring — that does the damage.
+  //
+  // The first version of this guard required >=50% silence and, measured
+  // against all 50 scored interviews in production, would have fired for
+  // exactly none of them: the worst real transcript is 36% silent. These
+  // thresholds park the two candidates who were actually harmed (4/11 silent
+  // scoring 36, and 3/14 scoring 43) and leave the one who passed at 3/12
+  // alone.
+  const SILENT_TURN_FLOOR = 3;
+  const tooMuchSilence =
+    silentTurns.length >= SILENT_TURN_FLOOR ||
+    (candidateTurns.length > 0 && silentTurns.length * 4 >= candidateTurns.length);
+
+  if (!passed && tooMuchSilence) {
+    await supabase
+      .from("ai_interviews")
+      .update({ status: "failed_technical" })
+      .eq("id", interview.id as string);
+
+    await recordVendorFailure({
+      vendor: "elevenlabs",
+      operation: "interview.score.silentTranscript",
+      error: new Error(
+        `Not rejected: ${silentTurns.length} of ${candidateTurns.length} answers were silent (scored ${scorecard.overall_score})`
+      ),
+      fatal: false,
+      context: { interviewId: interview.id, candidateId, score: scorecard.overall_score },
+    });
+
+    return;
   }
 
   const advance = passed && satisfiesDbInvariant;
