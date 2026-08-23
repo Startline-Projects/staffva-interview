@@ -502,7 +502,13 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         if (!mountedRef.current) return;
 
         interviewIdRef.current = data.interviewId;
-        setConversation([{ role: "interviewer", text: data.response }]);
+        // On resume the server sends the full prior conversation; on a fresh
+        // start there is only the opening question.
+        setConversation(
+          Array.isArray(data.conversation) && data.conversation.length > 0
+            ? data.conversation
+            : [{ role: "interviewer", text: data.response }]
+        );
 
         // Play Alex's opening message
         setPhase("ai_speaking");

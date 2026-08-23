@@ -75,11 +75,30 @@ export async function POST(request: NextRequest) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleStart(supabase: any, candidate: Record<string, unknown>) {
+  // Only resume a RECENT interview. There was no age bound, so a candidate
+  // whose session broke months ago was dropped back into it every time they
+  // pressed Start, with no way to begin again — five such rows exist in
+  // production, the oldest 138 days, one of them past the 15-question cap.
+  // ai_interviews has no updated_at column, so this keys on created_at.
+  const STALE_AFTER_HOURS = 6;
+  const staleCutoff = new Date(Date.now() - STALE_AFTER_HOURS * 3600_000).toISOString();
+
+  // Retire anything older before looking, so the candidate falls through to a
+  // fresh interview rather than being pinned. failed_technical is the same
+  // state used for interviews parked for human review.
+  await supabase
+    .from("ai_interviews")
+    .update({ status: "failed_technical" })
+    .eq("candidate_id", candidate.id)
+    .eq("status", "in_progress")
+    .lt("created_at", staleCutoff);
+
   const { data: existing } = await supabase
     .from("ai_interviews")
     .select("id")
     .eq("candidate_id", candidate.id)
     .eq("status", "in_progress")
+    .gte("created_at", staleCutoff)
     .limit(1)
     .maybeSingle();
 
@@ -96,6 +115,9 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
     return NextResponse.json({
       interviewId: existing.id,
       response: lastMsg?.text || "Welcome back. Let us continue where we left off.",
+      // The whole conversation, so a resuming candidate sees the answers they
+      // already gave instead of one orphaned question with no context.
+      conversation,
       isComplete: false,
     });
   }
