@@ -102,6 +102,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Failed to save scores: " + updateError.message }, { status: 500 });
     }
 
+    // The platform's /api/recruiter/approve gates on
+    // candidates.second_interview_status === "completed". Writing it only on
+    // the ai_interviews row above left that column at 'none' or 'scheduled'
+    // for every candidate — zero of 253 had ever reached 'completed' — so
+    // approve returned 400 for everyone and the candidate's dashboard never
+    // marked the recruiter stage done.
+    const { error: candidateStatusError } = await supabase
+      .from("candidates")
+      .update({ second_interview_status: "completed" })
+      .eq("id", interview.candidate_id);
+
+    if (candidateStatusError) {
+      return NextResponse.json(
+        { error: "Scores saved, but marking the candidate complete failed: " + candidateStatusError.message },
+        { status: 500 }
+      );
+    }
+
     return NextResponse.json({
       scored: true,
       scores: {
