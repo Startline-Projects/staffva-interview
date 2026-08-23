@@ -36,6 +36,20 @@ export const LIMITS = {
 } satisfies Record<string, RateLimit>;
 
 /**
+ * Seconds until the current fixed window rolls over.
+ *
+ * Retry-After previously reported the whole window length, so a caller blocked
+ * at 59 minutes past was told to wait another full hour when the counter was
+ * about to reset. This mirrors check_rate_limit's own
+ * floor(epoch / window) * window exactly, so the two cannot disagree.
+ */
+function secondsUntilWindowResets(windowSeconds: number): number {
+  const nowSeconds = Date.now() / 1000;
+  const windowStart = Math.floor(nowSeconds / windowSeconds) * windowSeconds;
+  return Math.max(1, Math.ceil(windowStart + windowSeconds - nowSeconds));
+}
+
+/**
  * Returns null when the caller may proceed, or a 429 response to return.
  *
  * Fails OPEN. If the limiter itself errors, the request is allowed: this
@@ -61,10 +75,14 @@ export async function enforceRateLimit(
     }
 
     if (allowed === false) {
-      console.warn(`[rate-limit] blocked ${key} (>${limit} per ${windowSeconds}s)`);
+      const retryAfter = secondsUntilWindowResets(windowSeconds);
+      console.warn(`[rate-limit] blocked ${key} (>${limit} per ${windowSeconds}s, resets in ${retryAfter}s)`);
       return NextResponse.json(
-        { error: "Too many requests. Please wait a moment and try again." },
-        { status: 429, headers: { "Retry-After": String(windowSeconds) } }
+        {
+          error: "Too many requests. Please wait a moment and try again.",
+          retryAfterSeconds: retryAfter,
+        },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
       );
     }
 
