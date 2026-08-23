@@ -17,11 +17,18 @@
     },
     "src/app/api/interview/cron/score-pending/route.ts": {
       "maxDuration": 60
+    },
+    "src/app/api/health/vendors/route.ts": {
+      "maxDuration": 30
     }
   },
   "crons": [
     {
       "path": "/api/interview/cron/score-pending",
+      "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/health/vendors",
       "schedule": "*/15 * * * *"
     }
   ]

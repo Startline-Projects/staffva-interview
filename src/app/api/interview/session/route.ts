@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyInterviewToken } from "@/lib/auth/verify-token";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { isFatalVendorError, recordVendorFailure } from "@/lib/vendorFailure";
 import { v4 as uuidv4 } from "uuid";
 
 interface ConversationEntry {
@@ -163,7 +164,29 @@ async function handleRespond(supabase: any, candidate: Record<string, unknown>, 
     .maybeSingle();
   const attemptNumber = attemptData?.attempt_number || 1;
 
-  const claudeResponse = await getClaudeResponse(candidate, conversation, questionsAsked, attemptNumber);
+  let claudeResponse;
+  try {
+    claudeResponse = await getClaudeResponse(candidate, conversation, questionsAsked, attemptNumber);
+  } catch {
+    // getClaudeResponse only rethrows configuration failures — a retired model
+    // id, a revoked key. Every candidate is hitting this, so stop the interview
+    // here instead of burning fifteen turns of paid speech synthesis and
+    // transcription to build a transcript that cannot be scored. The candidate's
+    // answers so far are preserved and the attempt is left resumable.
+    await supabase
+      .from("ai_interviews")
+      .update({ transcript: conversation, status: "error" })
+      .eq("id", interviewId);
+
+    return NextResponse.json(
+      {
+        error:
+          "The interview service is unavailable right now. Your answers have been saved — please try again shortly.",
+        retryable: true,
+      },
+      { status: 503 }
+    );
+  }
 
   conversation.push({ role: "interviewer", text: claudeResponse.text });
 
@@ -274,7 +297,30 @@ async function getClaudeResponse(
 
     return { text, isComplete };
   } catch (err) {
-    console.error("Claude API error:", err);
-    return { text: "I had a brief technical issue. Could you please repeat your last answer?", isComplete: false };
+    const fatal = isFatalVendorError(err);
+
+    await recordVendorFailure({
+      vendor: "anthropic",
+      operation: "interview.session.turn",
+      error: err,
+      fatal,
+      context: { questionsAsked, attemptNumber },
+    });
+
+    // A retired model id, a revoked key or a bad request will hit every single
+    // turn for every candidate. Answering "I had a brief technical issue" here
+    // is what hid a ten-week outage: the interview limped to MAX_QUESTIONS,
+    // produced a transcript of nothing but apologies, and was then scored --
+    // while still paying ElevenLabs and Deepgram for every turn. Surface it.
+    if (fatal) {
+      throw err;
+    }
+
+    // Transient (429, 5xx, timeout). Asking the candidate to repeat is a
+    // reasonable recovery, and the failure is now on record either way.
+    return {
+      text: "I had a brief technical issue. Could you please repeat your last answer?",
+      isComplete: false,
+    };
   }
 }
