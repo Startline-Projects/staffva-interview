@@ -327,22 +327,68 @@ async function performScoring(
 
   // If passed, assign second interviewer and send delegation email
   if (scorecard.passed) {
-    const { data: delegation } = await supabase
-      .from("interviewer_delegation")
-      .select("interviewer_name, interviewer_email")
-      .eq("company_id", "staffva")
-      .eq("role_category", interview.role_category as string)
-      .limit(1)
-      .maybeSingle();
+    // This used to read interviewer_delegation directly, matching on
+    // role_category. That table stores 12 GROUP names ("Support and Admin");
+    // candidates.role_category stores 45 JOB TITLES ("Virtual Assistant"). They
+    // intersect on one value, "Paralegal", by coincidence — so of 29 candidates
+    // who passed, exactly 2 were ever assigned an interviewer and 27 were not.
+    // The lookup used .maybeSingle(), so no match was null rather than an error,
+    // and the whole block below sat behind `if (delegation)`: no assignment, no
+    // email, no log. The candidate passed and waited forever.
+    //
+    // resolve_second_interviewer (migration 00106) tries the recruiter already
+    // assigned to this candidate, then interviewer_delegation, then whoever owns
+    // the job title. Checked against every existing candidate: it resolves all
+    // 254, where the old lookup resolved 25.
+    const { data: resolved, error: resolveError } = await supabase.rpc(
+      "resolve_second_interviewer",
+      {
+        p_candidate_id: candidateId,
+        p_role_category: (interview.role_category as string) || null,
+      }
+    );
 
-    if (delegation) {
-      await supabase
+    const delegation = Array.isArray(resolved) ? resolved[0] : resolved;
+
+    if (resolveError || !delegation?.interviewer_email) {
+      // Say so. Silence here is what hid this for the whole of the last
+      // campaign; the alerter also watches for passed-but-unassigned so this
+      // does not depend on someone reading logs.
+      console.error(
+        "[second-interview] no interviewer could be resolved",
+        JSON.stringify({
+          interview_id: interview.id,
+          candidate_id: candidateId,
+          role_category: interview.role_category,
+          error: resolveError?.message ?? null,
+        })
+      );
+    }
+
+    if (delegation?.interviewer_email) {
+      const { error: assignError } = await supabase
         .from("ai_interviews")
         .update({
           second_interviewer_assigned: delegation.interviewer_name,
           second_interviewer_email: delegation.interviewer_email,
         })
         .eq("id", interview.id);
+
+      // The assignment is what the recruiter dashboard and the alerter both key
+      // on. If it failed, the delegation email below still goes out, so a
+      // recruiter is told to interview someone the system has no record of
+      // assigning to them — worth knowing about rather than discarding.
+      if (assignError) {
+        console.error(
+          "[second-interview] interviewer resolved but assignment write failed",
+          JSON.stringify({
+            interview_id: interview.id,
+            candidate_id: candidateId,
+            interviewer_email: delegation.interviewer_email,
+            error: assignError.message,
+          })
+        );
+      }
 
       try {
         const emailInterviewData = {

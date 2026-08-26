@@ -43,16 +43,42 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Interview not found" }, { status: 404 });
     }
 
-    // Check recruiter has access to this role category (admin sees all)
+    // Check the recruiter may score this interview (admin sees all).
+    //
+    // This used to list the caller's interviewer_delegation rows and require
+    // interview.role_category to be among them. Those two columns speak
+    // different vocabularies — 12 group names against 45 job titles, with
+    // "Paralegal" the only accidental overlap — so this refused every recruiter
+    // for every candidate who was not a Paralegal. It has never rejected an
+    // attacker, because nobody ever got far enough to be one: zero second
+    // interviews have been scored.
+    //
+    // can_score_second_interview (00107/00108) is written to mirror
+    // resolve_second_interviewer deliberately. If routing picks someone that
+    // this then refuses, the candidate is stranded exactly as before, one step
+    // later — so the two rules live together in the database rather than drifting
+    // apart across two repositories.
     if (role === "recruiter") {
-      const { data: delegations } = await supabase
-        .from("interviewer_delegation")
-        .select("role_category")
-        .eq("interviewer_email", recruiterEmail);
+      const { data: allowed, error: authError } = await supabase.rpc(
+        "can_score_second_interview",
+        { p_interviewer_email: recruiterEmail, p_interview_id: interviewId }
+      );
 
-      const assignedCategories = (delegations || []).map((d: { role_category: string }) => d.role_category);
-      if (!assignedCategories.includes(interview.role_category)) {
-        return NextResponse.json({ error: "Not authorized for this candidate's role category" }, { status: 403 });
+      // Fail CLOSED. This one guards who may write a hiring decision, so an
+      // unreachable check must deny rather than wave the request through.
+      if (authError) {
+        console.error("[second-interview] authorization check failed:", authError.message);
+        return NextResponse.json(
+          { error: "Could not verify your access to this candidate. Please try again." },
+          { status: 503 }
+        );
+      }
+
+      if (allowed !== true) {
+        return NextResponse.json(
+          { error: "Not authorized for this candidate" },
+          { status: 403 }
+        );
       }
     }
 
