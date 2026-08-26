@@ -126,7 +126,13 @@ export async function sendTechnicalIssueEmail(candidate: CandidateData) {
 
   const resend = new Resend(process.env.RESEND_API_KEY);
   const firstName = candidate.display_name.split(" ")[0];
-  const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "https://interview.staffva.com";
+  // Send them to the PLATFORM, not straight at the interview app. /interview
+  // requires a token in the query string, and this email has none to give: the
+  // platform mints a fresh one when the candidate clicks through from their
+  // dashboard (see the candidate dashboard's "Start AI Interview"). Linking
+  // directly would land them on "No interview token provided" — telling someone
+  // to retake and then handing them a dead end.
+  const staffvaUrl = process.env.NEXT_PUBLIC_STAFFVA_URL || "https://staffva.com";
 
   const html = "<div style='font-family:Arial,sans-serif;max-width:600px;'>" +
     "<h2>Hi " + firstName + ",</h2>" +
@@ -137,7 +143,7 @@ export async function sendTechnicalIssueEmail(candidate: CandidateData) {
     "this interview.</p>" +
     "<p>You can retake it right now. There is no penalty and no waiting " +
     "period.</p>" +
-    "<p><a href='" + siteUrl + "/interview' style='display:inline-block;background:#d97706;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;'>Retake your interview</a></p>" +
+    "<p><a href='" + staffvaUrl + "/candidate/dashboard' style='display:inline-block;background:#d97706;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;'>Retake your interview</a></p>" +
     "<p><strong>Before you start:</strong> use headphones if you have them, " +
     "check that your browser is allowed to use your microphone, and find " +
     "somewhere quiet with a stable connection.</p>" +

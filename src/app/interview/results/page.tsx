@@ -174,8 +174,12 @@ function ResultsContent() {
               <li>Check that your browser is allowed to use your microphone.</li>
               <li>Find somewhere quiet with a stable internet connection.</li>
             </ul>
+            {/* The token has to travel with them. /interview reads it from the
+                query string and shows "No interview token provided" without it,
+                so a bare href sent the candidate from "please retake" straight
+                into an error page. */}
             <a
-              href="/interview"
+              href={token ? `/interview?token=${encodeURIComponent(token)}` : "/interview"}
               className="inline-block mt-6 bg-amber-600 hover:bg-amber-500 text-white font-semibold px-6 py-3 rounded-lg transition-colors"
             >
               Retake the interview
