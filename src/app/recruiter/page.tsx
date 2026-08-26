@@ -45,34 +45,50 @@ export default async function RecruiterDashboard() {
     .select("role_category")
     .eq("recruiter_id", profile.id);
 
-  if (!assignments || assignments.length === 0) {
-    return (
-      <div>
-        <div className="flex items-center justify-between mb-8">
-          <h1 className="text-2xl font-bold">My Candidates</h1>
-          <p className="text-gray-500 text-sm">{recruiterName}</p>
-        </div>
-        <div className="bg-gray-900 rounded-xl p-12 text-center border border-gray-800">
-          <p className="text-gray-500">
-            No candidates assigned yet. Your assigned role categories will appear here once candidates complete their AI interview.
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // Deliberately NOT an early return on "no role categories". A recruiter can
+  // have zero recruiter_assignments and still have interviews routed to them by
+  // name — that is exactly the case for the two candidates currently routed to
+  // test-recruiter-eng@staffva.com, who has no assignments at all. Returning
+  // here told them they had nothing while two people waited.
+  const roleCategories = (assignments ?? []).map((a) => a.role_category);
 
-  const roleCategories = assignments.map((a) => a.role_category);
+  const SELECT_COLUMNS =
+    "id, candidate_id, role_category, overall_score, badge_level, second_interview_status, second_interview_overall, speaking_level, pre_interview_guide, completed_at, candidates!inner(display_name, country)";
 
-  // Query ai_interviews with candidate join
-  const { data: interviews, error: intErr } = await supabase
-    .from("ai_interviews")
-    .select(
-      "id, candidate_id, role_category, overall_score, badge_level, second_interview_status, second_interview_overall, speaking_level, pre_interview_guide, completed_at, candidates!inner(display_name, country)"
-    )
-    .in("role_category", roleCategories)
-    .not("completed_at", "is", null)
-    .eq("passed", true)
-    .order("completed_at", { ascending: false });
+  // Two queries rather than one, because "my candidates" has two meanings and
+  // listing only the first hid the second.
+  //
+  // This page filtered on role_category alone. But interviews are ROUTED by
+  // resolve_second_interviewer, which prefers the candidate's assigned
+  // recruiter — and a recruiter can be assigned a candidate without owning that
+  // candidate's role category. So an interview could be routed to someone whose
+  // dashboard would never list it. Measured across the 29 candidates who have
+  // passed: 9 were routed to a recruiter who could not see them, including all
+  // 3 of Jerome's.
+  //
+  // Done as two requests and merged, rather than one PostgREST .or(), because
+  // an .or() containing an in.() list has to inline role category values like
+  // "UI/UX and Writing" into the filter string, where the slash and spaces are
+  // an escaping hazard for no benefit.
+  const base = () =>
+    supabase
+      .from("ai_interviews")
+      .select(SELECT_COLUMNS)
+      .not("completed_at", "is", null)
+      .eq("passed", true);
+
+  const [byCategory, byRouting] = await Promise.all([
+    // An empty .in() list is not worth asking PostgREST about.
+    roleCategories.length > 0
+      ? base().in("role_category", roleCategories)
+      : Promise.resolve({ data: [], error: null }),
+    // An empty email would match on nothing useful and is worth skipping too.
+    user.email
+      ? base().ilike("second_interviewer_email", user.email)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  const intErr = byCategory.error || byRouting.error;
 
   if (intErr) {
     return (
@@ -81,6 +97,17 @@ export default async function RecruiterDashboard() {
       </div>
     );
   }
+
+  // Deduplicate: an interview both routed to this recruiter AND in one of their
+  // categories comes back from both queries.
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const row of [...(byCategory.data ?? []), ...(byRouting.data ?? [])]) {
+    byId.set((row as Record<string, unknown>).id as string, row as Record<string, unknown>);
+  }
+
+  const interviews = [...byId.values()].sort((a, b) =>
+    String(b.completed_at ?? "").localeCompare(String(a.completed_at ?? ""))
+  );
 
   const candidates: CandidateRow[] = (interviews || []).map((row: Record<string, unknown>) => {
     const cand = row.candidates as Record<string, string>;
