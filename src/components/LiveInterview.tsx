@@ -198,6 +198,14 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
 
       if (!mountedRef.current) return;
 
+      // A turn completed end to end. This is the ONLY point that proves the
+      // whole pipeline works, so it is the only place the failure count may be
+      // cleared. It used to be cleared on a bare TRANSCRIPTION success instead
+      // — a different vendor on a different route — which wiped the counter
+      // before every retry of the session call that was actually failing. See
+      // the note at the reset site below.
+      consecutiveFailuresRef.current = 0;
+
       // Add AI response to conversation
       setConversation((prev) => [...prev, { role: "interviewer", text: data.response }]);
 
@@ -449,7 +457,18 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           return;
         }
 
-        consecutiveFailuresRef.current = 0;
+        // NOT reset here any more. This point means Deepgram transcribed
+        // something; it says nothing about whether the interview turn will
+        // succeed. Both sendResponse call sites below sit after this line with
+        // nothing touching the ref in between, so the counter was always 0 on
+        // entry to sendResponse — its increment made it exactly 1, and its
+        // `>= 3` bound could never be true. The session-side guard was
+        // unreachable code, and repeated 500/502/504/timeout failures retried
+        // without limit, each iteration paying for another transcription of
+        // silence and appending another junk turn to the stored transcript.
+        //
+        // The transcription guard just above is unaffected: it early-returns
+        // before reaching here, so its own increments still accumulate.
 
         const transcript = result.transcript;
 
