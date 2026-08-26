@@ -5,6 +5,11 @@ import { useEffect, useState, Suspense } from "react";
 
 interface InterviewResult {
   id: string;
+  // 'failed_technical' means the interview was parked for review rather than
+  // failed. The scorecard fields are still populated — the score is computed
+  // and kept before the parking decision — so this is the ONLY field that
+  // distinguishes the two.
+  status: string;
   overall_score: number;
   badge_level: string;
   technical_knowledge_score: number;
@@ -129,6 +134,57 @@ function ResultsContent() {
     developing: "bg-gray-600 text-gray-200",
     not_ready: "bg-gray-700 text-gray-400",
   };
+
+  // Parked for review: the transcript was largely our own silence, so the
+  // scorecard below was deliberately not acted on. Showing it anyway would do
+  // the exact harm the parking exists to prevent — telling someone they failed
+  // an interview they were never actually heard in. The old page showed the
+  // failing score, the negative feedback, and "you can retake in 3 days", which
+  // was also untrue: parking writes no interview_attempts row, so there is no
+  // cooldown and they can start again immediately.
+  if (result.status === "failed_technical") {
+    return (
+      <div className="min-h-screen bg-gray-950 text-white">
+        <div className="max-w-2xl mx-auto px-6 py-12">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-bold mb-2">We could not hear you, {firstName}</h1>
+            <p className="text-gray-400">
+              This was a problem on our side, not with your answers.
+            </p>
+          </div>
+
+          <div className="bg-gray-900 rounded-xl p-6 mb-6">
+            <p className="text-gray-300 mb-4">
+              Most of your answers did not reach us — our system recorded silence
+              where your responses should have been. We are not scoring this
+              interview, because a score based on audio we failed to capture
+              would not say anything about you.
+            </p>
+            <p className="text-gray-300">
+              A member of our team is reviewing it. You do not need to wait for
+              them: you can retake the interview now, and there is no penalty and
+              no waiting period.
+            </p>
+          </div>
+
+          <div className="bg-gray-900 rounded-xl p-6">
+            <h2 className="text-xl font-semibold mb-3">Before you retake</h2>
+            <ul className="text-gray-400 space-y-2 list-disc list-inside">
+              <li>Use headphones if you have them — this prevents most audio problems.</li>
+              <li>Check that your browser is allowed to use your microphone.</li>
+              <li>Find somewhere quiet with a stable internet connection.</li>
+            </ul>
+            <a
+              href="/interview"
+              className="inline-block mt-6 bg-amber-600 hover:bg-amber-500 text-white font-semibold px-6 py-3 rounded-lg transition-colors"
+            >
+              Retake the interview
+            </a>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const dimensions = [
     { label: "Technical Knowledge", score: result.technical_knowledge_score, feedback: result.technical_knowledge_feedback },

@@ -108,6 +108,51 @@ export async function sendFailEmail(candidate: CandidateData, score: number) {
   });
 }
 
+/**
+ * Sent when an interview is PARKED rather than scored.
+ *
+ * A parked interview is one where most of the candidate's answers reached us as
+ * silence — our audio pipeline failing, not them refusing to speak. The
+ * scorecard exists but is deliberately not acted on, so this email must not
+ * mention a score: quoting a number produced from audio we failed to capture is
+ * the same harm as rejecting them on it.
+ *
+ * Without this the candidate got nothing at all. The parking logic returns
+ * early, before the results email, so unless they happened to still have the
+ * results page open they were never told anything had gone wrong.
+ */
+export async function sendTechnicalIssueEmail(candidate: CandidateData) {
+  if (!candidate.email) return;
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  const firstName = candidate.display_name.split(" ")[0];
+  const siteUrl = process.env.NEXT_PUBLIC_APP_URL || "https://interview.staffva.com";
+
+  const html = "<div style='font-family:Arial,sans-serif;max-width:600px;'>" +
+    "<h2>Hi " + firstName + ",</h2>" +
+    "<p>We hit a technical problem during your StaffVA interview: most of your " +
+    "answers did not reach us, and our system recorded silence where your " +
+    "responses should have been.</p>" +
+    "<p><strong>This was our fault, not yours</strong>, so we are not scoring " +
+    "this interview.</p>" +
+    "<p>You can retake it right now. There is no penalty and no waiting " +
+    "period.</p>" +
+    "<p><a href='" + siteUrl + "/interview' style='display:inline-block;background:#d97706;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;'>Retake your interview</a></p>" +
+    "<p><strong>Before you start:</strong> use headphones if you have them, " +
+    "check that your browser is allowed to use your microphone, and find " +
+    "somewhere quiet with a stable connection.</p>" +
+    "<p>Our team is also reviewing what happened. You do not need to wait for " +
+    "them.</p>" +
+    "</div>";
+
+  await resend.emails.send({
+    from: "StaffVA Interview System <noreply@staffva.com>",
+    to: candidate.email,
+    subject: "We could not hear your interview — please retake it",
+    html,
+  });
+}
+
 export async function sendDelegationEmail(
   candidate: CandidateData,
   interview: InterviewData,

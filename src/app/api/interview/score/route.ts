@@ -4,7 +4,7 @@ import { verifyInterviewToken } from "@/lib/auth/verify-token";
 import { enforceRateLimit, LIMITS } from "@/lib/rateLimit";
 import { recordVendorFailure } from "@/lib/vendorFailure";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { sendCandidateResultsEmail, sendDelegationEmail, sendFailEmail } from "@/lib/emails/send-results";
+import { sendCandidateResultsEmail, sendDelegationEmail, sendFailEmail, sendTechnicalIssueEmail } from "@/lib/emails/send-results";
 import { generateAndSaveGuide } from "@/lib/generate-pre-interview-guide";
 
 interface TranscriptEntry {
@@ -249,6 +249,26 @@ async function performScoring(
       fatal: false,
       context: { interviewId: interview.id, candidateId, score: scorecard.overall_score },
     });
+
+    // Tell them. This return skips the results email below, so a parked
+    // candidate previously heard nothing at all — the interview simply ended
+    // and no message ever arrived. Refusing to reject someone is only an
+    // improvement if they find out; otherwise it is indistinguishable from
+    // being ignored.
+    //
+    // Deliberately mentions no score. The scorecard exists, but quoting a
+    // number computed from audio we failed to capture does the same harm as
+    // acting on it.
+    if (candidate?.email) {
+      try {
+        await sendTechnicalIssueEmail({
+          display_name: candidate.display_name,
+          email: candidate.email,
+        });
+      } catch (emailErr) {
+        console.error("Failed to send technical-issue email:", emailErr);
+      }
+    }
 
     return;
   }
