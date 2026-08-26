@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { recordVendorFailure } from "@/lib/vendorFailure";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 /**
  * GET /api/health/vendors
@@ -135,6 +136,35 @@ export async function GET(request: NextRequest) {
   ]);
 
   const healthy = checks.every((c) => c.ok);
+
+  // Record the OUTCOME of every check, not just the failures.
+  //
+  // Previously a successful run wrote nothing at all, which made "no failure
+  // row" ambiguous: it meant either everything is fine or the cron never ran,
+  // and those need opposite responses. It also threw away the ElevenLabs tier
+  // and character quota on every run — the one number the capacity plan depends
+  // on — leaving a hand-rolled curl as the only way to read it.
+  //
+  // Best-effort: a health check must never fail because its own bookkeeping
+  // failed, or it becomes the outage it is meant to report.
+  try {
+    const supabase = createSupabaseServiceClient();
+    const { error } = await supabase.from("vendor_health").upsert(
+      checks.map((c) => ({
+        vendor: c.vendor,
+        checked_at: new Date().toISOString(),
+        ok: c.ok,
+        detail: c.detail ? String(c.detail).slice(0, 500) : null,
+        duration_ms: typeof c.ms === "number" ? c.ms : null,
+      })),
+      { onConflict: "vendor" }
+    );
+    if (error) {
+      console.error("[health/vendors] could not record health:", error.message);
+    }
+  } catch (err) {
+    console.error("[health/vendors] could not record health:", err);
+  }
 
   return NextResponse.json(
     {
