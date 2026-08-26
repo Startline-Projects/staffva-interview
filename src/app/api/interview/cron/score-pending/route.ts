@@ -53,9 +53,19 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ scanned: 0, triggered: 0 });
   }
 
-  const baseUrl = process.env.VERCEL_URL
-    ? `https://${process.env.VERCEL_URL}`
-    : "http://localhost:3000";
+  // Deliberately NOT process.env.VERCEL_URL.
+  //
+  // VERCEL_URL is the per-DEPLOYMENT hostname (staffva-interview-<hash>.vercel.app),
+  // and Vercel puts those behind Deployment Protection — a server-side fetch to
+  // one gets an authentication challenge page, not this API. So every sweep ran,
+  // found the interviews, tried to call itself, and was turned away. The symptom
+  // was an interview that finished on 2026-04-09 and was still unscored 139 days
+  // later, with the failure visible only in function logs.
+  //
+  // The production domain is stable and not protected, so that is what to call.
+  const baseUrl =
+    process.env.NEXT_PUBLIC_APP_URL?.replace(/\/+$/, "") ||
+    (process.env.VERCEL ? "https://interview.staffva.com" : "http://localhost:3000");
 
   let triggered = 0;
   const failures: string[] = [];
@@ -83,6 +93,23 @@ export async function GET(request: NextRequest) {
 
   if (failures.length > 0) {
     console.error(`[score-pending] ${failures.length} failed:`, failures.join("; "));
+  }
+
+  // A sweep that found work and completed NONE of it is broken, not idle — that
+  // is the state it sat in for months while returning 200 and looking healthy.
+  // Returning non-2xx makes it show as a failing cron in Vercel, the same
+  // backstop alert-health uses, so it cannot go quiet again.
+  if (pending.length > 0 && triggered === 0) {
+    return NextResponse.json(
+      {
+        scanned: pending.length,
+        triggered,
+        failed: failures.length,
+        error: "found interviews to score but completed none",
+        failures: failures.slice(0, 5),
+      },
+      { status: 500 }
+    );
   }
 
   return NextResponse.json({ scanned: pending.length, triggered, failed: failures.length });
