@@ -80,6 +80,11 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
   // pressed Start, with no way to begin again — five such rows exist in
   // production, the oldest 138 days, one of them past the 15-question cap.
   // ai_interviews has no updated_at column, so this keys on created_at.
+  // COUPLED TO THE PLATFORM'S TOKEN EXPIRY. The platform mints the interview
+  // token at 8h (Staffva-platform-main, src/lib/interviewToken.ts) specifically
+  // to outlive this window — every route here verifies that token, so a resume
+  // window longer than the token's life promises something the candidate cannot
+  // do. It was 6h against a 1h token. If this number grows, grow the mint first.
   const STALE_AFTER_HOURS = 6;
   const staleCutoff = new Date(Date.now() - STALE_AFTER_HOURS * 3600_000).toISOString();
 
