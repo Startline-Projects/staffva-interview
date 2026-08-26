@@ -21,11 +21,32 @@ export function isFatalVendorError(err: unknown): boolean {
   const status = (err as { status?: number } | null)?.status;
   if (status === 401 || status === 403 || status === 404) return true;
 
-  // The SDK reports an unknown/retired model as a 400 or 404 whose message
-  // names the model, which is exactly the case that went undetected.
   if (status === 400) {
     const message = err instanceof Error ? err.message.toLowerCase() : "";
-    return message.includes("model");
+
+    // The SDK reports an unknown/retired model as a 400 or 404 whose message
+    // names the model, which is exactly the case that went undetected.
+    if (message.includes("model")) return true;
+
+    // Billing. Anthropic returns "Your credit balance is too low to access the
+    // Anthropic API" as a plain 400, and it was landing here as NON-fatal —
+    // because it does not contain the word "model".
+    //
+    // That is backwards. An exhausted balance is the most total failure a vendor
+    // can have: every request fails, no candidate can be interviewed or scored,
+    // and it does not heal on its own. And because alert-health raises its
+    // critical vendor alert on `fatal = true`, this was the one failure
+    // guaranteed to stay quiet. It was found by reading the table by hand, which
+    // is precisely what the alert exists to make unnecessary.
+    if (
+      message.includes("credit") ||
+      message.includes("billing") ||
+      message.includes("quota") ||
+      message.includes("payment") ||
+      message.includes("insufficient")
+    ) {
+      return true;
+    }
   }
   return false;
 }
