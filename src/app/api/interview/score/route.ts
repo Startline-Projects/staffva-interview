@@ -192,32 +192,6 @@ async function performScoring(
     return;
   }
 
-  // The database enforces its own invariant (trigger enforce_pending_2nd_invariant,
-  // migration 00084): a candidate may only move to 'pending_2nd_interview' when a
-  // completed ai_interviews row scores >= 60 — a HARDCODED floor, independent of
-  // interview_config.pass_threshold used above.
-  //
-  // If those disagree (threshold configured below 60, or a model returning
-  // passed=true under 60), the trigger raises and the ENTIRE update below is
-  // rolled back — losing the score, badge and completed_at as well, not just the
-  // status. The candidate is then stranded: scored in ai_interviews but never
-  // advanced, and the "already scored" guard blocks any retry.
-  //
-  // So only attempt the advance when it satisfies the DB invariant, and log
-  // loudly when the two rules disagree instead of silently losing the writeback.
-  const DB_ADVANCE_FLOOR = 60;
-  const satisfiesDbInvariant = scorecard.overall_score >= DB_ADVANCE_FLOOR;
-
-  if (passed && !satisfiesDbInvariant) {
-    console.error(
-      `[CRITICAL] Pass threshold (${passThreshold}) conflicts with the database ` +
-        `invariant (>= ${DB_ADVANCE_FLOOR}). Candidate ${candidateId} scored ` +
-        `${scorecard.overall_score} and passed by config, but cannot be advanced to ` +
-        `pending_2nd_interview. Scores are still saved; advance manually or raise ` +
-        `interview_config.pass_threshold to ${DB_ADVANCE_FLOOR}.`
-    );
-  }
-
   // Do not reject a candidate on a transcript that is substantially our own
   // silence. Checked here rather than before scoring, for three reasons: the
   // score is still computed and kept, a PASSING candidate is never parked, and
@@ -273,8 +247,6 @@ async function performScoring(
     return;
   }
 
-  const advance = passed && satisfiesDbInvariant;
-
   // Write back to candidates table immediately after ai_interviews update
   const { error: candidateUpdateError } = await supabase
     .from("candidates")
@@ -283,11 +255,19 @@ async function performScoring(
       ai_interview_score: scorecard.overall_score,
       ai_interview_passed: passed,
       ai_interview_completed_at: new Date().toISOString(),
-      ...(advance
-        ? { admin_status: "pending_2nd_interview" }
-        : passed
-          ? {} // passed by config but below the DB floor — leave status untouched
-          : { admin_status: "ai_interview_failed" }),
+      // A pass no longer sets admin_status here. It used to advance the
+      // candidate to 'pending_2nd_interview', which no longer exists as a step:
+      // whether a pass makes someone approvable depends on the ten profile
+      // gates too, and those are not this route's business. So record the
+      // result, then let promote_candidate_if_ready decide (below).
+      //
+      // This also retires the whole DB_ADVANCE_FLOOR guard that used to sit
+      // here. It existed because writing 'pending_2nd_interview' could trip the
+      // 00084 invariant trigger and roll back the ENTIRE update, losing the
+      // score and badge along with the status. We never write that status now,
+      // so the trigger cannot fire on this path and the strand it guarded
+      // against is gone.
+      ...(passed ? {} : { admin_status: "ai_interview_failed" }),
       ai_interview_retake_notified_at: null,
     })
     .eq("id", candidateId);
@@ -296,6 +276,28 @@ async function performScoring(
     console.error(`[CRITICAL] Failed to write back to candidates table for ${candidateId}:`, candidateUpdateError.message);
   } else {
     console.log(`[SUCCESS] Candidate ${candidateId} writeback complete. Score: ${scorecard.overall_score}, Passed: ${passed}`);
+  }
+
+  // Does passing make them approvable? Only if the ten profile gates hold too,
+  // so the decision lives in one place both apps call (migration 00116) rather
+  // than being reimplemented here. Staying unpromoted is the ordinary outcome
+  // for anyone who has not finished Build Your Profile yet — that step calls the
+  // same function and promotes them when they do.
+  //
+  // A failure here is logged rather than thrown: the score is already saved, and
+  // the promotion is idempotent, so the next attempt simply succeeds. The sweep
+  // in /api/cron/promote-ready is what guarantees that "next attempt" exists for
+  // a candidate who has no remaining steps of their own to trigger one.
+  if (passed) {
+    const { data: placement, error: promoteError } = await supabase.rpc("promote_candidate_if_ready", {
+      p_candidate_id: candidateId,
+    });
+
+    if (promoteError) {
+      console.error(`[CRITICAL] Could not decide placement for ${candidateId}:`, promoteError.message);
+    } else {
+      console.log(`[SUCCESS] Candidate ${candidateId} placement after passing: ${placement}`);
+    }
   }
 
   // On fail: log attempt and send retake-notice email
