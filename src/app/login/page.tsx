@@ -41,9 +41,9 @@ export default function LoginPage() {
       // Redirect based on role
       if (role === "admin") {
         router.push("/dashboard/admin");
-      } else if (role === "recruiter") {
-        router.push("/recruiter");
       } else {
+        // Recruiters land on /dashboard too. /recruiter was the second-interview
+        // queue and no longer exists; sending them there 404s on sign-in.
         router.push("/dashboard");
       }
     } catch {

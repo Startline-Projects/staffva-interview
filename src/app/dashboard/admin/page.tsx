@@ -13,7 +13,7 @@ export default async function AdminDashboard() {
   // Get all completed interviews
   const { data: interviews } = await supabase
     .from("ai_interviews")
-    .select("id, candidate_id, role_category, overall_score, badge_level, passed, second_interview_status, status, completed_at")
+    .select("id, candidate_id, role_category, overall_score, badge_level, passed, status, completed_at")
     .eq("status", "completed")
     .order("completed_at", { ascending: false });
 
@@ -67,7 +67,6 @@ export default async function AdminDashboard() {
             overall_score: number;
             badge_level: string;
             passed: boolean;
-            second_interview_status: string;
             completed_at: string;
           }) => {
             const candidate = candidateMap[interview.candidate_id];
@@ -94,13 +93,6 @@ export default async function AdminDashboard() {
                       {interview.completed_at ? new Date(interview.completed_at).toLocaleDateString() : ""}
                     </p>
                   </div>
-                  <span className={"px-2 py-1 rounded text-xs " + (
-                    interview.second_interview_status === "completed" ? "bg-green-900 text-green-300" :
-                    interview.second_interview_status === "scheduled" ? "bg-blue-900 text-blue-300" :
-                    "bg-gray-800 text-gray-400"
-                  )}>
-                    {interview.second_interview_status || "pending"}
-                  </span>
                   <Link
                     href={"/dashboard/interview/" + interview.id}
                     className="px-4 py-2 bg-amber-600 hover:bg-amber-700 rounded-lg text-sm font-medium transition-colors"

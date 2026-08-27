@@ -8,10 +8,6 @@ interface RecruiterRow {
   email: string;
   name: string;
   categories: string[];
-  total: number;
-  pending: number;
-  scheduled: number;
-  completed: number;
   lastSignIn: string | null;
 }
 
@@ -36,32 +32,23 @@ export default async function RecruitersPage() {
     recruiterMap[d.interviewer_email].categories.push(d.role_category);
   }
 
-  // Get all passed interviews grouped by role category
-  const { data: interviews } = await supabase
-    .from("ai_interviews")
-    .select("role_category, second_interview_status, passed")
-    .eq("passed", true);
-
   // Get auth users for last sign in
   const { data: authData } = await supabase.auth.admin.listUsers();
   const authUsers = authData?.users || [];
 
   // Build recruiter rows
+  // The four per-recruiter tallies that used to sit here (Total / Pending /
+  // Scheduled / Completed) counted the second-interview status column. All 57
+  // rows held 'pending' and none was ever anything else, so those columns
+  // reported a workload that never existed. The page's real value is the roster,
+  // the last login and the password reset, all of which are untouched.
   const rows: RecruiterRow[] = Object.entries(recruiterMap).map(([email, info]) => {
-    const relevantInterviews = (interviews || []).filter(
-      (i: { role_category: string }) => info.categories.includes(i.role_category)
-    );
-
     const authUser = authUsers.find((u: { email?: string }) => u.email === email);
 
     return {
       email,
       name: info.name,
       categories: info.categories,
-      total: relevantInterviews.length,
-      pending: relevantInterviews.filter((i: { second_interview_status: string }) => !i.second_interview_status || i.second_interview_status === "pending").length,
-      scheduled: relevantInterviews.filter((i: { second_interview_status: string }) => i.second_interview_status === "scheduled").length,
-      completed: relevantInterviews.filter((i: { second_interview_status: string }) => i.second_interview_status === "completed").length,
       lastSignIn: authUser?.last_sign_in_at || null,
     };
   });
@@ -80,10 +67,6 @@ export default async function RecruitersPage() {
             <tr className="border-b border-gray-800 text-left text-sm text-gray-500">
               <th className="px-5 py-3">Recruiter</th>
               <th className="px-5 py-3">Categories</th>
-              <th className="px-5 py-3 text-center">Total</th>
-              <th className="px-5 py-3 text-center">Pending</th>
-              <th className="px-5 py-3 text-center">Scheduled</th>
-              <th className="px-5 py-3 text-center">Completed</th>
               <th className="px-5 py-3">Last Login</th>
               <th className="px-5 py-3">Actions</th>
             </tr>
@@ -102,10 +85,6 @@ export default async function RecruitersPage() {
                     ))}
                   </div>
                 </td>
-                <td className="px-5 py-4 text-center font-bold">{row.total}</td>
-                <td className="px-5 py-4 text-center text-gray-400">{row.pending}</td>
-                <td className="px-5 py-4 text-center text-blue-400">{row.scheduled}</td>
-                <td className="px-5 py-4 text-center text-green-400">{row.completed}</td>
                 <td className="px-5 py-4 text-xs text-gray-500">
                   {row.lastSignIn ? new Date(row.lastSignIn).toLocaleString() : "Never"}
                 </td>

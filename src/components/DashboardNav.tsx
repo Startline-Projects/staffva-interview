@@ -33,7 +33,7 @@ export default function DashboardNav({ user }: DashboardNavProps) {
           )}
           {user.role === "recruiter" && (
             <div className="flex gap-4 text-sm">
-              <a href="/recruiter" className="text-gray-400 hover:text-white transition-colors">My Candidates</a>
+              <a href="/dashboard" className="text-gray-400 hover:text-white transition-colors">My Candidates</a>
             </div>
           )}
         </div>

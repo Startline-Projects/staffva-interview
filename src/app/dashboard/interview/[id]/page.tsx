@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth/get-session-user";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import InterviewStatusUpdater from "@/components/InterviewStatusUpdater";
 import Link from "next/link";
 
 interface PageProps {
@@ -32,14 +31,27 @@ export default async function InterviewDetailPage({ params }: PageProps) {
     .eq("id", interview.candidate_id)
     .single();
 
-  // Access check: recruiter can only see their assigned categories
+  // Access check: a recruiter may only open interviews in their own categories.
+  //
+  // Scoped by recruiter_assignments, not interviewer_delegation. The latter was
+  // second-interview routing and speaks group names rather than job titles, so it
+  // matched 2 of 30 passed interviews — meaning this check denied a recruiter
+  // access to 28 of the 30 transcripts they were responsible for.
   if (user.role === "recruiter") {
-    const { data: delegations } = await supabase
-      .from("interviewer_delegation")
-      .select("role_category")
-      .eq("interviewer_email", user.email);
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("email", user.email)
+      .maybeSingle();
 
-    const assignedCategories = delegations?.map((d: { role_category: string }) => d.role_category) || [];
+    const { data: assignments } = profile
+      ? await supabase
+          .from("recruiter_assignments")
+          .select("role_category")
+          .eq("recruiter_id", profile.id)
+      : { data: null };
+
+    const assignedCategories = assignments?.map((a: { role_category: string }) => a.role_category) || [];
     if (!assignedCategories.includes(interview.role_category)) {
       return <div className="text-center py-12 text-gray-500">You do not have access to this interview.</div>;
     }
@@ -95,17 +107,6 @@ export default async function InterviewDetailPage({ params }: PageProps) {
         </div>
       </div>
 
-      {/* Second interview status */}
-      {user.role === "recruiter" && (
-        <div className="bg-gray-900 rounded-xl p-6 mb-6">
-          <h3 className="font-semibold mb-3">Second Interview Status</h3>
-          <InterviewStatusUpdater
-            interviewId={interview.id}
-            currentStatus={interview.second_interview_status || "pending"}
-          />
-        </div>
-      )}
-
       {/* Dimension scores */}
       <div className="bg-gray-900 rounded-xl p-6 mb-6">
         <h3 className="font-semibold mb-4">Scorecard</h3>
@@ -155,7 +156,7 @@ export default async function InterviewDetailPage({ params }: PageProps) {
       {/* Suggested focus areas */}
       {interview.improvement_feedback && (
         <div className="bg-gray-900 rounded-xl p-6 mb-6">
-          <h3 className="font-semibold mb-2">Suggested Focus Areas for Second Interview</h3>
+          <h3 className="font-semibold mb-2">Suggested Focus Areas</h3>
           <p className="text-gray-400 text-sm">{interview.improvement_feedback}</p>
         </div>
       )}

@@ -206,7 +206,7 @@ function ResultsContent() {
           {result.passed ? (
             <div>
               <h1 className="text-3xl font-bold mb-2">Congratulations, {firstName}!</h1>
-              <p className="text-gray-400">You have advanced to a second interview.</p>
+              <p className="text-gray-400">You passed your interview.</p>
             </div>
           ) : (
             <div>
@@ -283,8 +283,9 @@ function ResultsContent() {
           <h2 className="text-xl font-semibold mb-2">Next Steps</h2>
           {result.passed ? (
             <p className="text-gray-400">
-              A member of our team will contact you to schedule your second interview.
-              Check your email for details about your assigned interviewer.
+              This was the only interview — there is no second one. Once every part of
+              your profile is complete, your profile goes live on StaffVA and clients can
+              find you. Your dashboard shows anything still outstanding.
             </p>
           ) : (
             <p className="text-gray-400">
