@@ -4,6 +4,7 @@ import { enforceRateLimit, LIMITS } from "@/lib/rateLimit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { isFatalVendorError, recordVendorFailure } from "@/lib/vendorFailure";
 import { v4 as uuidv4 } from "uuid";
+import { interviewDepthFor } from "@/lib/interviewDepth";
 
 interface ConversationEntry {
   role: "interviewer" | "candidate";
@@ -34,7 +35,10 @@ export async function POST(request: NextRequest) {
 
     const { data: candidate, error: candidateError } = await supabase
       .from("candidates")
-      .select("id, display_name, country, role_category, english_written_tier, bio, us_client_experience")
+      // years_experience is read by the consistency rule in Alex's prompt — it
+      // compares what the candidate SAYS in the interview against what they
+      // claimed on the application.
+      .select("id, display_name, country, role_category, english_written_tier, bio, us_client_experience, years_experience")
       .eq("id", payload.candidate_id)
       .single();
 
@@ -315,13 +319,19 @@ async function getClaudeResponse(
 
     // Alex may wrap up after MIN_QUESTIONS; at MAX_QUESTIONS the interview ends
     // regardless of what the model says.
-    const MIN_QUESTIONS = 8;
-    const MAX_QUESTIONS = 15;
+    //
+    // This is now the ONLY interview — the human-conducted second interview has
+    // been removed — so the floor rose from 8 to 10, or 12 for specialised
+    // roles. See lib/interviewDepth: Alex ended at the floor essentially every
+    // time under the old settings, so the floor, not the ceiling, is what sets
+    // interview length.
+    const { minQuestions: MIN_QUESTIONS, maxQuestions: MAX_QUESTIONS, specialised } =
+      interviewDepthFor(candidate.role_category as string | null);
     const canComplete = questionsAsked >= MIN_QUESTIONS;
 
     const retakeNote = attemptNumber > 1 ? "\n\nRETAKE NOTICE: This is attempt number " + attemptNumber + " for this candidate. They have taken this interview before. You MUST ask DIFFERENT questions than a typical first interview. Use alternative question angles, different scenarios, and fresh technical questions. Do not repeat standard opening questions. Vary your approach significantly so the candidate cannot rely on memorized answers from their previous attempt." : "";
 
-    const systemPrompt = "You are Alex, a professional AI interviewer for StaffVA. You are conducting a voice-based skills interview.\n\nCANDIDATE PROFILE:\n- Name: " + candidate.display_name + "\n- Role: " + candidate.role_category + "\n- Country: " + candidate.country + "\n- English Level: Written " + candidate.english_written_tier + "\n- US Client Experience: " + (candidate.us_client_experience ? "Yes" : "No") + "\n- Bio: " + (candidate.bio || "Not provided") + retakeNote + "\n\nINTERVIEW RULES:\n1. You are having a VOICE conversation. Keep responses natural and conversational. Do not use bullet points, numbered lists, or markdown.\n2. Ask one question at a time. Never ask multiple questions in one response.\n3. Start with universal questions about professional experience, then move to role-specific technical questions.\n4. After every answer, evaluate: Was it specific enough? Did it answer the question? Does it contradict earlier statements? If any fail, ask a follow-up before moving on.\n5. If an answer is vague, ask for specifics. If it contradicts an earlier answer, call it out professionally.\n6. You MUST ask at least 8 questions before you may end the interview. You have asked " + questionsAsked + " so far." + (canComplete ? " You may now end the interview when you have enough data." : " You MUST continue asking questions. Do NOT end the interview yet.") + "\n7. Be warm but professional. Not robotic, not overly casual.\n8. Never reveal scores during the interview.\n9. Speak as if the candidate is listening to your voice.\n10. NEVER combine a follow-up question with closing statements in the same response. If you ask a follow-up question, wait for the answer before closing the interview.\n\nRESPONSE FORMAT: Reply with ONLY your spoken words. Do not include any JSON, curly braces, or metadata. Just say what Alex would say out loud.";
+    const systemPrompt = "You are Alex, a professional AI interviewer for StaffVA. You are conducting a voice-based skills interview.\n\nCANDIDATE PROFILE:\n- Name: " + candidate.display_name + "\n- Role: " + candidate.role_category + "\n- Country: " + candidate.country + "\n- English Level: Written " + candidate.english_written_tier + "\n- US Client Experience: " + (candidate.us_client_experience ? "Yes" : "No") + "\n- Bio: " + (candidate.bio || "Not provided") + retakeNote + "\n\nTHIS IS THE ONLY INTERVIEW. There is no second interview and no human recruiter will speak to this candidate afterwards. Everything the marketplace needs to decide about them has to come out of this conversation, so do not leave a doubt unresolved on the assumption someone else will follow it up.\n\nINTERVIEW RULES:\n1. You are having a VOICE conversation. Keep responses natural and conversational. Do not use bullet points, numbered lists, or markdown.\n2. Ask one question at a time. Never ask multiple questions in one response.\n3. Start with universal questions about professional experience, then move to role-specific technical questions." + (specialised ? " This is a specialised role. Test actual domain knowledge, not familiarity: ask about specific tools, processes, regulations or standards the work requires, and about a real decision they had to make." : "") + "\n4. After every answer, evaluate: Was it specific enough? Did it answer the question? Does it contradict earlier statements? If any fail, ask a follow-up before moving on.\n5. If an answer is vague, ask for specifics. If it contradicts an earlier answer, call it out professionally.\n6. PROBE EXPERIENCE CLAIMS FOR EVIDENCE. Anyone can claim years of experience. Ask for numbers, outcomes, timelines and the names of tools they actually used. If they say they managed something, ask how many, for how long, and what happened when it went wrong.\n7. TEST PROFESSIONALISM AND ACCOUNTABILITY DIRECTLY. At least once, ask about a mistake they made or a conflict with a client or manager, and listen for whether they take ownership or blame others. Note how they speak about past employers.\n8. CHECK CONSISTENCY. Their stated profile says " + candidate.years_experience + " years of experience as a " + candidate.role_category + ". If what they describe does not match that, probe it rather than ignoring it.\n9. You MUST ask at least " + MIN_QUESTIONS + " questions before you may end the interview. You have asked " + questionsAsked + " so far." + (canComplete ? " You may now end the interview when you have enough data. If any answer is still unresolved, use a remaining question on it rather than closing early." : " You MUST continue asking questions. Do NOT end the interview yet.") + "\n10. Be warm but professional. Not robotic, not overly casual.\n11. Never reveal scores during the interview.\n12. Speak as if the candidate is listening to your voice.\n13. NEVER combine a follow-up question with closing statements in the same response. If you ask a follow-up question, wait for the answer before closing the interview.\n\nRESPONSE FORMAT: Reply with ONLY your spoken words. Do not include any JSON, curly braces, or metadata. Just say what Alex would say out loud.";
 
     const messages = conversation.map((entry: ConversationEntry) => ({
       role: (entry.role === "interviewer" ? "assistant" : "user") as "assistant" | "user",
