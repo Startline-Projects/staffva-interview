@@ -1,6 +1,17 @@
 const DEEPGRAM_API_URL = "https://api.deepgram.com/v1";
 
-export async function transcribeAudio(audioBuffer: ArrayBuffer | Buffer | Uint8Array): Promise<string> {
+export interface TranscriptionResult {
+  text: string;
+  // Deepgram's own confidence for the winning alternative (0..1) and the
+  // measured audio duration. SERVER-derived from the audio itself, so unlike
+  // the client-reported turn timing these cannot be fabricated in transit —
+  // low confidence is the "degraded evidence" signal the review flow needs to
+  // distinguish bad audio from bad answers.
+  confidence: number | null;
+  durationSeconds: number | null;
+}
+
+export async function transcribeAudio(audioBuffer: ArrayBuffer | Buffer | Uint8Array): Promise<TranscriptionResult> {
   const apiKey = process.env.DEEPGRAM_API_KEY;
   if (!apiKey) throw new Error("DEEPGRAM_API_KEY is not configured");
 
@@ -53,5 +64,10 @@ export async function transcribeAudio(audioBuffer: ArrayBuffer | Buffer | Uint8A
   }
 
   const data = await response.json();
-  return data.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";
+  const alt = data.results?.channels?.[0]?.alternatives?.[0];
+  return {
+    text: alt?.transcript || "",
+    confidence: typeof alt?.confidence === "number" ? alt.confidence : null,
+    durationSeconds: typeof data.metadata?.duration === "number" ? data.metadata.duration : null,
+  };
 }

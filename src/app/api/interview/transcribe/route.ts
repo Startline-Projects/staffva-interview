@@ -44,9 +44,13 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     // Transcribe
-    const transcript = await transcribeAudio(buffer);
+    const result = await transcribeAudio(buffer);
 
-    return NextResponse.json({ transcript });
+    return NextResponse.json({
+      transcript: result.text,
+      stt_confidence: result.confidence,
+      stt_duration_s: result.durationSeconds,
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Transcription failed";
     return NextResponse.json({ error: message }, { status: 500 });

@@ -4,8 +4,23 @@
     {
       "name": "interview-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3000,
+      "autoPort": true
+    },
+    {
+      "name": "platform-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "/Users/kass/Downloads/Staffva-platform-main/node_modules/next/dist/bin/next",
+        "dev",
+        "--turbopack",
+        "/Users/kass/Downloads/Staffva-platform-main"
+      ],
+      "port": 3005,
       "autoPort": true
     }
   ]

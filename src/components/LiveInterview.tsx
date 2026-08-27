@@ -84,6 +84,14 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
   const analyserRef = useRef<AnalyserNode | null>(null);
   const vadFrameRef = useRef<number | null>(null);
   const lastSpeechTimeRef = useRef<number>(0);
+  // Turn timing, measured here because only the browser knows when the mic
+  // opened and when speech actually began. Sent to the server as ADVISORY
+  // data — it bounds-checks and records them, and stamps its own clock as the
+  // authoritative axis. A turn with no measured speech sends latency null and
+  // speech 0, which is itself signal (the "[No response detected]" path).
+  const listenStartedAtRef = useRef<number>(0);
+  const firstSpeechAtRef = useRef<number | null>(null);
+  const turnTimingRef = useRef<{ latency_ms?: number; speech_ms?: number; stt_confidence?: number }>({});
 
   // Auto-scroll conversation
   useEffect(() => {
@@ -162,6 +170,11 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
       if (!response.ok) return { ok: false, transcript: "", status: response.status };
 
       const data = await response.json();
+      // Attach the server-measured transcription confidence to this turn's
+      // timing payload so it lands on the same transcript entry.
+      if (typeof data.stt_confidence === "number") {
+        turnTimingRef.current = { ...turnTimingRef.current, stt_confidence: data.stt_confidence };
+      }
       return { ok: true, transcript: data.transcript || "" };
     } catch {
       return { ok: false, transcript: "" };
@@ -184,6 +197,7 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
           action: "respond",
           interviewId: currentInterviewId,
           transcript,
+          timing: turnTimingRef.current,
         }),
         signal: AbortSignal.timeout(SESSION_TIMEOUT_MS),
       });
@@ -327,6 +341,8 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
     const SPEECH_LEVEL = 15;        // Audio level threshold (0-255)
 
     lastSpeechTimeRef.current = Date.now();
+    listenStartedAtRef.current = Date.now();
+    firstSpeechAtRef.current = null;
 
     // Set up AudioContext and AnalyserNode
     if (!audioContextRef.current) {
@@ -356,6 +372,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
       if (average > SPEECH_LEVEL) {
         // Speech detected — reset silence timer
         lastSpeechTimeRef.current = Date.now();
+        if (firstSpeechAtRef.current === null) {
+          firstSpeechAtRef.current = Date.now();
+        }
       }
 
       vadFrameRef.current = requestAnimationFrame(checkAudioLevel);
@@ -387,6 +406,17 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
   async function stopListeningAndProcess() {
     if (!isRecordingRef.current) return;
     isRecordingRef.current = false;
+
+    // Freeze this turn's timing before anything async happens. lastSpeechTime
+    // is "the last moment speech was heard", so speech duration is onset to
+    // last-heard; latency is mic-open to onset.
+    const firstSpeech = firstSpeechAtRef.current;
+    turnTimingRef.current = firstSpeech === null
+      ? { speech_ms: 0 }
+      : {
+          latency_ms: Math.max(0, firstSpeech - listenStartedAtRef.current),
+          speech_ms: Math.max(0, lastSpeechTimeRef.current - firstSpeech),
+        };
 
     // Clean up all timers and VAD
     if (silenceTimerRef.current) {

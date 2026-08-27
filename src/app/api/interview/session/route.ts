@@ -9,12 +9,50 @@ import { interviewDepthFor } from "@/lib/interviewDepth";
 interface ConversationEntry {
   role: "interviewer" | "candidate";
   text: string;
+  // When the SERVER recorded this entry. Stamped here, from the server clock,
+  // so it cannot be fabricated by the client. Absent on rows written before
+  // this field existed — every reader must tolerate that.
+  at?: string;
+  // Candidate entries only, and CLIENT-REPORTED — the browser measures how
+  // long after the microphone opened the first speech arrived (latency_ms)
+  // and how long the speech lasted (speech_ms). Advisory: bounds-checked on
+  // the way in, but a hostile client can fabricate them, so nothing may ever
+  // treat them as proof by themselves. The authoritative axis is the server
+  // `at` deltas between turns.
+  latency_ms?: number;
+  speech_ms?: number;
+  // Deepgram's confidence for this answer's transcription (0..1). Measured
+  // server-side by the transcribe route but forwarded through the client, so
+  // treat with the same advisory status as the timings.
+  stt_confidence?: number;
+}
+
+/**
+ * Validate client-reported turn timing. Returns only the fields that survive
+ * the bounds check; everything else is silently dropped rather than rejected,
+ * because timing must never be able to break an interview turn.
+ */
+function sanitizeTiming(raw: unknown): { latency_ms?: number; speech_ms?: number; stt_confidence?: number } {
+  if (!raw || typeof raw !== "object") return {};
+  const t = raw as Record<string, unknown>;
+  const out: { latency_ms?: number; speech_ms?: number; stt_confidence?: number } = {};
+  const TEN_MINUTES_MS = 600_000;
+  if (typeof t.latency_ms === "number" && Number.isFinite(t.latency_ms) && t.latency_ms >= 0 && t.latency_ms <= TEN_MINUTES_MS) {
+    out.latency_ms = Math.round(t.latency_ms);
+  }
+  if (typeof t.speech_ms === "number" && Number.isFinite(t.speech_ms) && t.speech_ms >= 0 && t.speech_ms <= TEN_MINUTES_MS) {
+    out.speech_ms = Math.round(t.speech_ms);
+  }
+  if (typeof t.stt_confidence === "number" && Number.isFinite(t.stt_confidence) && t.stt_confidence >= 0 && t.stt_confidence <= 1) {
+    out.stt_confidence = Math.round(t.stt_confidence * 1000) / 1000;
+  }
+  return out;
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { token, action, transcript, interviewId } = body;
+    const { token, action, transcript, interviewId, timing } = body;
 
     if (!token) {
       return NextResponse.json({ error: "Missing token" }, { status: 400 });
@@ -66,7 +104,7 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      return await handleRespond(supabase, candidate, interviewId, transcript);
+      return await handleRespond(supabase, candidate, interviewId, transcript, sanitizeTiming(timing));
     }
 
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
@@ -160,7 +198,7 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
   const openingMessage = "Hello " + firstName + ", I am Alex, your AI interviewer. Welcome to your StaffVA skills interview for the " + candidate.role_category + " role. I will ask you a series of questions about your experience and skills. Take your time with each answer and be as specific as you can. Let us begin. Tell me about your most recent professional role and what your primary responsibilities were day to day.";
 
   const initialTranscript: ConversationEntry[] = [
-    { role: "interviewer", text: openingMessage },
+    { role: "interviewer", text: openingMessage, at: new Date().toISOString() },
   ];
 
   const { error: insertError } = await supabase.from("ai_interviews").insert({
@@ -196,7 +234,7 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function handleRespond(supabase: any, candidate: Record<string, unknown>, interviewId: string, transcript: string) {
+async function handleRespond(supabase: any, candidate: Record<string, unknown>, interviewId: string, transcript: string, timing: { latency_ms?: number; speech_ms?: number; stt_confidence?: number }) {
   const { data: interview, error: fetchError } = await supabase
     .from("ai_interviews")
     .select("*")
@@ -213,7 +251,7 @@ async function handleRespond(supabase: any, candidate: Record<string, unknown>, 
   }
 
   const conversation: ConversationEntry[] = [...(interview.transcript || [])];
-  conversation.push({ role: "candidate", text: transcript });
+  conversation.push({ role: "candidate", text: transcript, at: new Date().toISOString(), ...timing });
 
   // Persist the answer NOW, before the model call. The Anthropic client allows
   // 25s with one retry, so the call alone can consume most of this route's 60s
@@ -278,7 +316,7 @@ async function handleRespond(supabase: any, candidate: Record<string, unknown>, 
     );
   }
 
-  conversation.push({ role: "interviewer", text: claudeResponse.text });
+  conversation.push({ role: "interviewer", text: claudeResponse.text, at: new Date().toISOString() });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const updateData: any = { transcript: conversation };
