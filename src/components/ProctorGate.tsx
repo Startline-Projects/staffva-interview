@@ -49,6 +49,20 @@ export default function ProctorGate({ token, children }: Props) {
     });
   }, []);
 
+  // (Re)wire the stream to whatever video elements this phase just
+  // mounted — srcObject assigned before the element exists left the
+  // preview black and the frame-grabber's thumbnail empty (zero review
+  // frames uploaded; the platform's test session proved it).
+  useEffect(() => {
+    if (!streamRef.current) return;
+    if (previewRef.current && previewRef.current.srcObject !== streamRef.current) {
+      previewRef.current.srcObject = streamRef.current;
+    }
+    if (thumbRef.current && thumbRef.current.srcObject !== streamRef.current) {
+      thumbRef.current.srcObject = streamRef.current;
+    }
+  }, [phase]);
+
   // Consent may already be stamped from the proctored English test.
   useEffect(() => {
     let cancelled = false;
