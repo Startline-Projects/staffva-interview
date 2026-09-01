@@ -3,6 +3,7 @@
 import { useSearchParams } from "next/navigation";
 import { useEffect, useState, useRef, useCallback, Suspense } from "react";
 import LiveInterview from "@/components/LiveInterview";
+import ProctorGate from "@/components/ProctorGate";
 
 interface Candidate {
   id: string;
@@ -152,15 +153,19 @@ function InterviewContent() {
     );
   }
 
-  // Live interview view
+  // Live interview view — camera-proctored: the gate collects consent (if
+  // the English test didn't already), requires a working camera, and
+  // records for the whole interview.
   if (pageState === "interview" && token && candidate && streamRef.current) {
     return (
-      <LiveInterview
-        token={token}
-        candidateName={candidate.display_name}
-        roleCategory={candidate.role_category}
-        mediaStream={streamRef.current}
-      />
+      <ProctorGate token={token}>
+        <LiveInterview
+          token={token}
+          candidateName={candidate.display_name}
+          roleCategory={candidate.role_category}
+          mediaStream={streamRef.current}
+        />
+      </ProctorGate>
     );
   }
 

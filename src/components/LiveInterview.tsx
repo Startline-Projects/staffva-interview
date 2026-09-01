@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { proctorLinkAttempt } from "@/lib/proctorBridge";
 
 interface LiveInterviewProps {
   token: string;
@@ -551,6 +552,9 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         if (!mountedRef.current) return;
 
         interviewIdRef.current = data.interviewId;
+        // The proctor gate wrapping this interview binds its recording to
+        // the ai_interviews row it covered.
+        if (data.interviewId) proctorLinkAttempt(data.interviewId);
         // On resume the server sends the full prior conversation; on a fresh
         // start there is only the opening question.
         setConversation(
