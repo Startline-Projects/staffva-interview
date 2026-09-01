@@ -145,9 +145,16 @@ function InterviewContent() {
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-950 text-white">
-        <div className="text-center max-w-md">
+        <div className="text-center max-w-md px-6">
           <h1 className="text-2xl font-bold text-red-400 mb-4">Access Denied</h1>
           <p className="text-gray-400">{error}</p>
+          {/* The copy tells candidates to go back — give them the door. */}
+          <a
+            href="https://staffva.com/candidate/dashboard"
+            className="mt-6 inline-block rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white hover:bg-blue-500"
+          >
+            Back to your StaffVA dashboard
+          </a>
         </div>
       </div>
     );
