@@ -13,12 +13,14 @@ const securityHeaders = [
   // Interview tokens travel in the URL, so never send this app's full URLs to
   // a third-party origin.
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-  // The live interview records audio via getUserMedia({ audio: true }) — the
-  // microphone MUST stay allowed for this origin or the product cannot work.
-  // No camera is used anywhere in this app.
+  // The live interview records audio via getUserMedia({ audio: true }) and,
+  // since the camera proctor (ProctorGate), video via getUserMedia({ video })
+  // — BOTH must stay allowed for this origin or the product cannot work.
+  // camera=() here made the proctor gate's camera request fail instantly
+  // with no permission prompt at all.
   {
     key: "Permissions-Policy",
-    value: "microphone=(self), camera=(), geolocation=(), payment=(), usb=()",
+    value: "microphone=(self), camera=(self), geolocation=(), payment=(), usb=()",
   },
 ];
 
