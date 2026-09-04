@@ -33,6 +33,9 @@ export const LIMITS = {
   transcribe: { limit: 120, windowSeconds: 3600 },
   // Scoring is once per interview; the cron sweep may add one more.
   score: { limit: 10, windowSeconds: 3600 },
+  // Interview 1 session starts: a candidate legitimately starts once, maybe
+  // resumes a handful of times after refreshes.
+  iv1Session: { limit: 15, windowSeconds: 3600 },
 } satisfies Record<string, RateLimit>;
 
 /**

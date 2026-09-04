@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
       // years_experience is read by the consistency rule in Alex's prompt — it
       // compares what the candidate SAYS in the interview against what they
       // claimed on the application.
-      .select("id, display_name, country, role_category, english_written_tier, bio, us_client_experience, years_experience, skills, tools")
+      .select("id, display_name, country, role_category, english_written_tier, bio, us_client_experience, years_experience, skills, tools, interview1_passed, ai_interview_passed")
       .eq("id", payload.candidate_id)
       .single();
 
@@ -117,6 +117,24 @@ export async function POST(request: NextRequest) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleStart(supabase: any, candidate: Record<string, unknown>) {
+  // THE ORDER GATE (step 9): the skills exam is Interview 2 now — it opens
+  // after Interview 1 (behavioral) is passed. Pre-split candidates are
+  // grandfathered: anyone who already passed the single interview, or who
+  // has ANY skills-interview history (a pre-split failure mid-retake),
+  // continues on the skills track untouched.
+  if (candidate.interview1_passed !== true && candidate.ai_interview_passed !== true) {
+    const { count: skillsHistory } = await supabase
+      .from("ai_interviews")
+      .select("*", { count: "exact", head: true })
+      .eq("candidate_id", candidate.id)
+      .eq("kind", "skills");
+    if (!skillsHistory) {
+      return NextResponse.json(
+        { error: "Interview 1 must be completed first", interview1Required: true },
+        { status: 403 }
+      );
+    }
+  }
   // Only resume a RECENT interview. There was no age bound, so a candidate
   // whose session broke months ago was dropped back into it every time they
   // pressed Start, with no way to begin again — five such rows exist in
@@ -135,8 +153,9 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
   // state used for interviews parked for human review.
   await supabase
     .from("ai_interviews")
-    .update({ status: "failed_technical" })
+    .update({ status: "failed_technical", parked_reason: "stale_abandoned" })
     .eq("candidate_id", candidate.id)
+    .eq("kind", "skills")
     .eq("status", "in_progress")
     .lt("created_at", staleCutoff);
 
@@ -144,6 +163,7 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
     .from("ai_interviews")
     .select("id")
     .eq("candidate_id", candidate.id)
+    .eq("kind", "skills")
     .eq("status", "in_progress")
     .gte("created_at", staleCutoff)
     .limit(1)
@@ -173,6 +193,7 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
     .from("interview_attempts")
     .select("next_retake_available_at")
     .eq("candidate_id", candidate.id)
+    .eq("kind", "skills")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -190,7 +211,8 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
   const { count } = await supabase
     .from("interview_attempts")
     .select("*", { count: "exact", head: true })
-    .eq("candidate_id", candidate.id);
+    .eq("candidate_id", candidate.id)
+    .eq("kind", "skills");
 
   const attemptNumber = (count || 0) + 1;
   const interviewId = uuidv4();
@@ -217,6 +239,7 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
     candidate_id: candidate.id,
     attempt_number: attemptNumber,
     ai_interview_id: interviewId,
+    kind: "skills",
     // Explicitly null. The column defaults to now() + 3 days, and this row is
     // written when the interview STARTS — so merely beginning an interview
     // armed a three-day lockout. A candidate whose interview then broke was
@@ -235,11 +258,19 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function handleRespond(supabase: any, candidate: Record<string, unknown>, interviewId: string, transcript: string, timing: { latency_ms?: number; speech_ms?: number; stt_confidence?: number }) {
+  // THE KIND PIN (step 9). Without it, a candidate could mint a behavioral
+  // interview via /api/interview1/session and then drive it through THIS
+  // route — typing answers into `transcript` with unlimited time, no
+  // microphone, no Deepgram, no stored recording and no proctor session —
+  // then score it as a passed Interview 1 and unlock Interview 2. The
+  // behavioral round is answered by voice through /api/interview1/answer,
+  // which pins its own kind; this route only ever drives the skills exam.
   const { data: interview, error: fetchError } = await supabase
     .from("ai_interviews")
     .select("*")
     .eq("id", interviewId)
     .eq("candidate_id", candidate.id)
+    .eq("kind", "skills")
     .single();
 
   if (fetchError || !interview) {
@@ -262,7 +293,10 @@ async function handleRespond(supabase: any, candidate: Record<string, unknown>, 
   // a question they are scored on.
   await supabase
     .from("ai_interviews")
-    .update({ transcript: conversation })
+    // turn_count travels with the transcript on EVERY writer, so the
+    // column means the same thing on every row (00172). Only Interview 1
+    // reads it today; a column that is true for some rows is a trap.
+    .update({ transcript: conversation, turn_count: conversation.length })
     .eq("id", interviewId);
 
   const questionsAsked = conversation.filter((e: ConversationEntry) => e.role === "interviewer").length;
@@ -293,7 +327,7 @@ async function handleRespond(supabase: any, candidate: Record<string, unknown>, 
     // handleStart resume it, which 'failed_technical' would not.
     const { error: saveError } = await supabase
       .from("ai_interviews")
-      .update({ transcript: conversation })
+      .update({ transcript: conversation, turn_count: conversation.length })
       .eq("id", interviewId);
 
     if (saveError) {
@@ -319,7 +353,7 @@ async function handleRespond(supabase: any, candidate: Record<string, unknown>, 
   conversation.push({ role: "interviewer", text: claudeResponse.text, at: new Date().toISOString() });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const updateData: any = { transcript: conversation };
+  const updateData: any = { transcript: conversation, turn_count: conversation.length };
 
   if (claudeResponse.isComplete) {
     updateData.status = "completed";

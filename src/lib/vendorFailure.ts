@@ -7,7 +7,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
  * cannot happen silently again.
  */
 
-export type Vendor = "anthropic" | "deepgram" | "elevenlabs" | "resend";
+export type Vendor = "anthropic" | "deepgram" | "elevenlabs" | "resend" | "supabase";
 
 /**
  * Is this error one that every subsequent request will also hit?

@@ -5,6 +5,9 @@ import { useEffect, useState, Suspense } from "react";
 
 interface InterviewResult {
   id: string;
+  /** 'behavioral' (Interview 1) or 'skills' (Interview 2) — the five score
+   * columns are shared, so this is what says which rubric produced them. */
+  kind?: string;
   // 'failed_technical' means the interview was parked for review rather than
   // failed. The scorecard fields are still populated — the score is computed
   // and kept before the parking decision — so this is the ONLY field that
@@ -68,6 +71,14 @@ function ResultsContent() {
 
         if (data.error) {
           setError(data.error);
+          setLoading(false);
+        } else if (data.interview && data.interview.status === "failed_technical") {
+          // Parked for review. Interview 1 parks BEFORE scoring (the
+          // silence guard runs first), so there is no overall_score to wait
+          // for — polling for one would leave the candidate staring at
+          // "scoring is taking longer than expected" forever instead of the
+          // screen that explains what actually happened.
+          setResult(data.interview);
           setLoading(false);
         } else if (data.interview && data.interview.overall_score) {
           // Scores are ready
@@ -190,13 +201,27 @@ function ResultsContent() {
     );
   }
 
-  const dimensions = [
-    { label: "Technical Knowledge", score: result.technical_knowledge_score, feedback: result.technical_knowledge_feedback },
-    { label: "Problem Solving & Judgment", score: result.problem_solving_score, feedback: result.problem_solving_feedback },
-    { label: "Communication Clarity", score: result.communication_score, feedback: result.communication_feedback },
-    { label: "Experience Depth", score: result.experience_depth_score, feedback: result.experience_depth_feedback },
-    { label: "Professionalism & Reliability", score: result.professionalism_score, feedback: result.professionalism_feedback },
-  ];
+  // The five score columns are shared by both interviews, but they MEASURE
+  // different things depending on which one ran — the behavioral rubric
+  // scores judgment/approach/clarity/specificity/professionalism, and
+  // labelling those "Technical Knowledge" after an interview that asked no
+  // technical question is simply a wrong label on a real number.
+  const isBehavioral = result.kind === "behavioral";
+  const dimensions = isBehavioral
+    ? [
+        { label: "Situational Judgment", score: result.technical_knowledge_score, feedback: result.technical_knowledge_feedback },
+        { label: "Problem-Solving Approach", score: result.problem_solving_score, feedback: result.problem_solving_feedback },
+        { label: "Communication Clarity", score: result.communication_score, feedback: result.communication_feedback },
+        { label: "Specificity of Examples", score: result.experience_depth_score, feedback: result.experience_depth_feedback },
+        { label: "Professionalism & Self-Awareness", score: result.professionalism_score, feedback: result.professionalism_feedback },
+      ]
+    : [
+        { label: "Technical Knowledge", score: result.technical_knowledge_score, feedback: result.technical_knowledge_feedback },
+        { label: "Problem Solving & Judgment", score: result.problem_solving_score, feedback: result.problem_solving_feedback },
+        { label: "Communication Clarity", score: result.communication_score, feedback: result.communication_feedback },
+        { label: "Experience Depth", score: result.experience_depth_score, feedback: result.experience_depth_feedback },
+        { label: "Professionalism & Reliability", score: result.professionalism_score, feedback: result.professionalism_feedback },
+      ];
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -282,15 +307,24 @@ function ResultsContent() {
         <div className="bg-gray-900 rounded-xl p-6">
           <h2 className="text-xl font-semibold mb-2">Next Steps</h2>
           {result.passed ? (
-            <p className="text-gray-400">
-              This was the only interview — there is no second one. Once every part of
-              your profile is complete, your profile goes live on StaffVA and clients can
-              find you. Your dashboard shows anything still outstanding.
-            </p>
+            isBehavioral ? (
+              <p className="text-gray-400">
+                Interview 1 is done. Next up is <strong>Interview 2</strong> — a skills
+                interview about the work itself, which you can start from your dashboard
+                whenever you&apos;re ready.
+              </p>
+            ) : (
+              <p className="text-gray-400">
+                Both interviews are behind you. Once every part of your profile is
+                complete, your profile goes live on StaffVA and clients can find you. Your
+                dashboard shows anything still outstanding.
+              </p>
+            )
           ) : (
             <p className="text-gray-400">
-              You can retake your interview in 3 days. Use that time to practice the areas
-              listed above. Your new score will replace this one on your profile.
+              You can retake {isBehavioral ? "Interview 1" : "Interview 2"} in 3 days. Use
+              that time to practice the areas listed above. Your new score will replace
+              this one.
             </p>
           )}
         </div>

@@ -55,7 +55,7 @@ export async function sendCandidateResultsEmail(candidate: CandidateData, interv
     : "<p>Thank you for completing your StaffVA AI interview. Your results are below.</p>";
 
   const nextSteps = interview.passed
-    ? "<p><strong>What happens next:</strong> This was the only interview \u2014 there is no second one. Once every part of your profile is complete, your profile goes live on StaffVA and clients can find you. Your dashboard shows anything still outstanding.</p>"
+    ? "<p><strong>What happens next:</strong> Both interviews are behind you. Once every part of your profile is complete, your profile goes live on StaffVA and clients can find you. Your dashboard shows anything still outstanding.</p>"
     : "<p><strong>Retake available:</strong> You can retake your interview in 3 days. Use that time to practice the areas listed above. Your new score will replace this one.</p>";
 
   const html = "<div style='font-family:Arial,sans-serif;max-width:600px;'>" +
@@ -85,7 +85,11 @@ export async function sendCandidateResultsEmail(candidate: CandidateData, interv
   });
 }
 
-export async function sendFailEmail(candidate: CandidateData, score: number) {
+export async function sendFailEmail(
+  candidate: CandidateData,
+  score: number,
+  kind: "behavioral" | "skills" = "skills"
+) {
   if (!candidate.email) return;
 
   const resend = new Resend(process.env.RESEND_API_KEY);
@@ -93,11 +97,14 @@ export async function sendFailEmail(candidate: CandidateData, score: number) {
 
   const html = "<div style='font-family:Arial,sans-serif;max-width:600px;'>" +
     "<h2>Hi " + firstName + ",</h2>" +
-    "<p>Thank you for completing your StaffVA AI interview.</p>" +
+    "<p>Thank you for completing " + (kind === "behavioral" ? "Interview 1" : "Interview 2") + " with StaffVA.</p>" +
     "<p>Your score: <strong>" + score + " out of 100</strong>.</p>" +
     "<p>A score of <strong>60 or higher</strong> is required to proceed to the next stage.</p>" +
     "<p><strong>Retake available:</strong> You can retake your interview in 3 days. We will send you an email as soon as your retake is ready.</p>" +
-    "<p>Use the time to review the role fundamentals and prepare specific examples from your experience. Your new score will replace this one.</p>" +
+    "<p>" + (kind === "behavioral"
+      ? "Use the time to think through a few real situations you have handled — a disagreement, a problem you solved, a deadline that moved — and how you would walk someone through them. Specific beats polished."
+      : "Use the time to review the role fundamentals and prepare specific examples from your experience.") +
+      " Your new score will replace this one.</p>" +
     "</div>";
 
   await resend.emails.send({
@@ -155,6 +162,33 @@ export async function sendTechnicalIssueEmail(candidate: CandidateData) {
     from: "StaffVA Interview System <noreply@staffva.com>",
     to: candidate.email,
     subject: "We could not hear your interview — please retake it",
+    html,
+  });
+}
+
+/**
+ * Interview 1 passed. Short by design — the score breakdown lives on the
+ * results page and the dashboard; this exists so a pass is acknowledged at
+ * all, which it previously was not.
+ */
+export async function sendIv1PassEmail(candidate: CandidateData, score: number) {
+  if (!candidate.email) return;
+
+  const resend = new Resend(process.env.RESEND_API_KEY);
+  const firstName = candidate.display_name.split(" ")[0];
+
+  const html = "<div style='font-family:Arial,sans-serif;max-width:600px;'>" +
+    "<h2>Nicely done, " + firstName + ".</h2>" +
+    "<p>You passed <strong>Interview 1</strong> with a score of <strong>" + score + " out of 100</strong>.</p>" +
+    "<p><strong>What happens next:</strong> Interview 2 is a skills interview about the work itself — how you actually do the things you listed on your application. You can start it from your dashboard whenever you are ready; nothing is waiting on us.</p>" +
+    "<p>Your full score breakdown is on your dashboard.</p>" +
+    "<p style='color:#999;font-size:12px;margin-top:24px;'>— The StaffVA Team</p>" +
+    "</div>";
+
+  await resend.emails.send({
+    from: "StaffVA Interview System <noreply@staffva.com>",
+    to: candidate.email,
+    subject: "You passed Interview 1 — Interview 2 is open",
     html,
   });
 }

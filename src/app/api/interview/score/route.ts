@@ -69,6 +69,40 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ scored: true, interview });
     }
 
+    // Only a FINISHED interview is scorable. Without this, a candidate
+    // could answer one question, stop, and post a score request — grading
+    // a partial transcript and choosing which questions counted. The
+    // completion transition is the server's to make: the skills route sets
+    // it when Alex closes, interview1/answer when the plan is exhausted.
+    // (failed_technical rows are parked deliberately and are not scored.)
+    if (interview.status !== "completed") {
+      return NextResponse.json(
+        { error: "Interview is not complete", status: interview.status },
+        { status: 409 }
+      );
+    }
+
+    // Interview 1 (behavioral) has its own rubric and writebacks — one
+    // entry point for the client AND the rescue cron, dispatched by kind.
+    if (interview.kind === "behavioral") {
+      after(async () => {
+        try {
+          const { scoreIv1 } = await import("@/lib/iv1Score");
+          await scoreIv1(supabase, {
+            id: interview.id,
+            candidate_id: payload.candidate_id,
+            transcript: interview.transcript,
+            overall_score: interview.overall_score,
+          });
+        } catch (err) {
+          console.error("Background IV1 scoring failed:", err);
+          const { recordVendorFailure: record } = await import("@/lib/vendorFailure");
+          await record({ vendor: "anthropic", operation: "iv1_score", error: err });
+        }
+      });
+      return NextResponse.json({ scored: false, scoring_started: true });
+    }
+
     // Return immediately — scoring continues in the background via after()
     after(async () => {
       try {
@@ -154,7 +188,10 @@ async function performScoring(
   const attemptCount = await supabase
     .from("interview_attempts")
     .select("id", { count: "exact" })
-    .eq("candidate_id", candidateId);
+    .eq("candidate_id", candidateId)
+    // The SKILLS track only: an Interview 1 attempt is not a skills
+    // attempt, and counting it inflated attempt_number on this row.
+    .eq("kind", "skills");
 
   const priorAttempts = attemptCount.count ?? 0;
 
@@ -209,7 +246,7 @@ async function performScoring(
   if (!passed && tooMuchSilence) {
     await supabase
       .from("ai_interviews")
-      .update({ status: "failed_technical" })
+      .update({ status: "failed_technical", parked_reason: "silent_answers" })
       .eq("id", interview.id as string);
 
     await recordVendorFailure({

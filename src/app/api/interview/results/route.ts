@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
       // interview parked for review. Without it, a parked interview is
       // indistinguishable from a failure: it carries a full scorecard, because
       // the score is computed and kept before the parking decision is made.
-      .select("id, status, overall_score, badge_level, technical_knowledge_score, problem_solving_score, communication_score, experience_depth_score, professionalism_score, technical_knowledge_feedback, problem_solving_feedback, communication_feedback, experience_depth_feedback, professionalism_feedback, strengths, weaknesses, improvement_feedback, perfect_score_path, passed, role_category")
+      .select("id, kind, status, overall_score, badge_level, technical_knowledge_score, problem_solving_score, communication_score, experience_depth_score, professionalism_score, technical_knowledge_feedback, problem_solving_feedback, communication_feedback, experience_depth_feedback, professionalism_feedback, strengths, weaknesses, improvement_feedback, perfect_score_path, passed, role_category")
       .eq("id", interviewId)
       .eq("candidate_id", payload.candidate_id)
       .single();

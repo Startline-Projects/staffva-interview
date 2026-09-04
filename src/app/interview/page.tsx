@@ -4,6 +4,7 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useState, useRef, useCallback, Suspense } from "react";
 import LiveInterview from "@/components/LiveInterview";
 import ProctorGate from "@/components/ProctorGate";
+import Interview1Flow from "@/components/Interview1Flow";
 
 interface Candidate {
   id: string;
@@ -13,6 +14,8 @@ interface Candidate {
   english_written_tier: string;
   bio: string;
   us_client_experience: boolean;
+  interview1_passed?: boolean | null;
+  ai_interview_passed?: boolean | null;
 }
 
 type MicStatus = "idle" | "requesting" | "granted" | "denied";
@@ -27,6 +30,10 @@ function InterviewContent() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [pageState, setPageState] = useState<PageState>("briefing");
+  // Which interview does this candidate face? Interview 1 (behavioral)
+  // comes first now; pre-split candidates with skills history are
+  // grandfathered onto that track (the session route enforces the same).
+  const [skillsHistory, setSkillsHistory] = useState(false);
 
   const [micStatus, setMicStatus] = useState<MicStatus>("idle");
   const [audioTestStatus, setAudioTestStatus] = useState<AudioTestStatus>("idle");
@@ -59,6 +66,7 @@ function InterviewContent() {
           }
         } else {
           setCandidate(data.candidate);
+          setSkillsHistory(data.skillsHistory === true);
         }
       })
       .catch(() => setError("Failed to verify your identity. Please try again."))
@@ -157,6 +165,26 @@ function InterviewContent() {
           </a>
         </div>
       </div>
+    );
+  }
+
+  // ── The interview fork (step 9) ──
+  // Interview 1 (behavioral) comes first and owns its whole flow, Atlas
+  // skin included — consent, preflight, rules, scan, runner. Candidates who
+  // already passed it (or who are grandfathered onto the pre-split skills
+  // track) fall through to the skills exam below.
+  const needsInterview1 =
+    !!candidate &&
+    candidate.interview1_passed !== true &&
+    candidate.ai_interview_passed !== true &&
+    !skillsHistory;
+
+  if (needsInterview1 && token && candidate) {
+    return (
+      <Interview1Flow
+        token={token}
+        firstName={candidate.display_name?.split(" ")[0] || "there"}
+      />
     );
   }
 
