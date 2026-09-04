@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { registerProctorListener } from "@/lib/proctorBridge";
+import { PROCTOR_CONSENT_VERSION } from "@/lib/proctorConsent";
 
 /**
  * The camera-proctor gate for the AI interview — the interview app's twin
@@ -16,13 +17,16 @@ import { registerProctorListener } from "@/lib/proctorBridge";
 
 interface Props {
   token: string;
+  /** The interview's own microphone stream, borrowed so the proctor recording
+   *  can hear the room without acquiring the device a second time. */
+  micStream?: MediaStream | null;
   children: React.ReactNode;
 }
 
 const FRAME_INTERVAL_MS = 12_000;
 const CHUNK_MS = 10_000;
 
-export default function ProctorGate({ token, children }: Props) {
+export default function ProctorGate({ token, micStream, children }: Props) {
   const [phase, setPhase] = useState<"checking" | "consent" | "camera" | "live" | "blocked">("checking");
   const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -150,7 +154,28 @@ export default function ProctorGate({ token, children }: Props) {
       };
     });
 
-    const recorder = new MediaRecorder(stream, {
+    // The proctor recording has to HEAR the room, not just see it.
+    //
+    // It did not: getCamera() takes video only, so Interview 2's recording was
+    // silent video while Interview 1's hook takes audio:true and says so. A
+    // second person sitting outside a 640x480 frame reading answers aloud was
+    // invisible to every check in either app — and the automated reviewer only
+    // ever samples still frames anyway, so silent video is reviewed by nobody.
+    //
+    // The mic track is BORROWED from the stream the interview already holds
+    // rather than acquired again. A second getUserMedia({audio:true}) on the
+    // same device puts two live capture tracks on one microphone, which is a
+    // real source of dropouts on cheap hardware — and the answers matter more
+    // than the recording.
+    const audioTracks =
+      micStream?.getAudioTracks().filter((t) => t.readyState === "live") ?? [];
+    // A NEW MediaStream wrapping borrowed tracks. Stopping the recorder does
+    // not stop the tracks, and this stream is never torn down itself — the
+    // interview keeps owning its microphone and the gate keeps owning the
+    // camera, exactly as before.
+    const recordStream = new MediaStream([...stream.getVideoTracks(), ...audioTracks]);
+
+    const recorder = new MediaRecorder(recordStream, {
       mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp8")
         ? "video/webm;codecs=vp8"
         : "video/webm",
@@ -217,7 +242,7 @@ export default function ProctorGate({ token, children }: Props) {
     const res = await fetch("/api/proctor/consent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, version: "2.0" }),
+      body: JSON.stringify({ token, version: PROCTOR_CONSENT_VERSION }),
     });
     if (!res.ok) {
       setBusy(false);
@@ -285,8 +310,11 @@ export default function ProctorGate({ token, children }: Props) {
             </p>
             <ul className="mt-4 space-y-3 text-sm leading-relaxed text-gray-300">
               <li>
-                <strong className="text-white">Your camera records the whole session.</strong> A
-                visible indicator stays on screen while it&apos;s recording.
+                <strong className="text-white">
+                  Your camera and microphone record the whole session.
+                </strong>{" "}
+                That includes the room around you, not only your answers. A visible
+                indicator stays on screen while it&apos;s recording.
               </li>
               <li>
                 <strong className="text-white">A person makes any decision.</strong> Automated
@@ -381,19 +409,27 @@ export default function ProctorGate({ token, children }: Props) {
     <div className="relative">
       {children}
 
-      <div className="fixed bottom-4 right-4 z-40 flex items-center gap-2 rounded-lg border border-gray-700 bg-gray-900 p-2 shadow-lg">
+      {/* z-[300] deliberately: the Interview 2 task renders a fullscreen Atlas
+          overlay at z-index 200, and at z-40 this indicator sat underneath it.
+          The consent screen promises "a visible indicator stays on screen while
+          it's recording" — for the seven minutes of the task, it did not. */}
+      <div className="fixed bottom-4 right-4 z-[300] flex items-center gap-2 rounded-lg border border-gray-700 bg-gray-900 p-2 shadow-lg">
         <video ref={thumbRef} autoPlay muted playsInline className="h-12 w-16 rounded object-cover bg-black" />
         <div className="pr-1">
           <p className="flex items-center gap-1.5 text-[11px] font-semibold text-white">
             <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" aria-hidden />
             Proctored session
           </p>
-          <p className="text-[10px] text-gray-400">Camera is recording</p>
+          <p className="text-[10px] text-gray-400">Camera and mic recording</p>
         </div>
       </div>
 
+      {/* z-[310] — above both the task overlay (200) and the indicator (300).
+          A camera that dropped mid-task is the one thing that must be able to
+          interrupt anything on screen; buried under the task, the candidate
+          would have carried on recording nothing. */}
       {cameraLost && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+        <div className="fixed inset-0 z-[310] flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-sm rounded-xl border border-gray-700 bg-gray-900 p-6 text-center text-white">
             <p className="text-sm font-semibold">Camera disconnected</p>
             <p className="mt-2 text-xs leading-relaxed text-gray-400">

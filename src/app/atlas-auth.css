@@ -3856,3 +3856,288 @@
 }
 .lp-auth .interview-closing .ai-orb-core { inset: 20px; }
 .lp-auth .interview-closing .ai-orb-ring { inset: 8px; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   INTERVIEW 2 — THE ROLE TASK
+   The task runs inside .test-fullscreen, which is dark. The shared
+   .input / .select / .check-box are light-card controls, so the task
+   needs its own dark set rather than fighting the cascade.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* The task scrolls; the shared .test-body centres its child vertically,
+   which pins a long form half off-screen. */
+.lp-auth .test-body.task-body {
+  align-items: flex-start;
+  padding-top: 28px;
+  padding-bottom: 48px;
+}
+.lp-auth .iv2-task { width: 100%; max-width: 780px; }
+.lp-auth .iv2-task-intro {
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(251, 248, 242, 0.7);
+  margin: -14px 0 26px;
+}
+.lp-auth .iv2-block { margin-bottom: 34px; }
+.lp-auth .iv2-block-heading {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(214, 242, 77, 0.9);
+  margin-bottom: 12px;
+}
+.lp-auth .iv2-block-instruction {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: rgba(251, 248, 242, 0.6);
+  margin-bottom: 18px;
+}
+
+/* The document being read: an email, a purchase order, a policy. Set in
+   mono on a slightly lifted ground so it reads as a quoted artifact and
+   not as our own interface copy. */
+.lp-auth .iv2-paper {
+  background: rgba(251, 248, 242, 0.05);
+  border: 1px solid rgba(251, 248, 242, 0.1);
+  border-radius: var(--r-md);
+  padding: 20px 22px;
+  margin-bottom: 22px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.85;
+  color: rgba(251, 248, 242, 0.88);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 380px;
+  overflow-y: auto;
+}
+.lp-auth .iv2-paper-line.blank { height: 0.9em; }
+
+/* Fields */
+.lp-auth .iv2-field { margin-bottom: 18px; }
+.lp-auth .iv2-field-label {
+  display: block;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: rgba(251, 248, 242, 0.85);
+  margin-bottom: 7px;
+}
+.lp-auth .iv2-field-hint {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: rgba(251, 248, 242, 0.42);
+  margin-left: 8px;
+}
+.lp-auth .iv2-input {
+  width: 100%;
+  padding: 12px 14px;
+  font-family: inherit;
+  font-size: 14.5px;
+  background: rgba(251, 248, 242, 0.06);
+  border: 1.5px solid rgba(251, 248, 242, 0.14);
+  border-radius: var(--r-md);
+  color: var(--paper);
+  transition: border-color .15s ease, background .15s ease;
+}
+.lp-auth .iv2-input::placeholder { color: rgba(251, 248, 242, 0.3); }
+.lp-auth .iv2-input:focus {
+  outline: none;
+  border-color: var(--lime);
+  background: rgba(251, 248, 242, 0.09);
+}
+.lp-auth .iv2-input.filled { border-color: rgba(214, 242, 77, 0.4); }
+
+.lp-auth .iv2-select {
+  width: 100%;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 13.5px;
+  background: rgba(251, 248, 242, 0.06);
+  border: 1.5px solid rgba(251, 248, 242, 0.14);
+  border-radius: var(--r-sm);
+  color: var(--paper);
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none'><path d='M3 4.5 6 7.5 9 4.5' stroke='rgba(251,248,242,0.5)' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+.lp-auth .iv2-select:focus { outline: none; border-color: var(--lime); }
+.lp-auth .iv2-select option { background: #1a1a17; color: var(--paper); }
+
+/* A queue item: the prompt, then its four actions. */
+.lp-auth .iv2-queue-item {
+  padding: 16px 0 18px;
+  border-bottom: 1px solid rgba(251, 248, 242, 0.08);
+}
+.lp-auth .iv2-queue-item:last-child { border-bottom: 0; }
+.lp-auth .iv2-queue-text {
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: rgba(251, 248, 242, 0.9);
+  margin-bottom: 12px;
+}
+.lp-auth .iv2-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.lp-auth .iv2-action {
+  padding: 8px 14px;
+  font-family: inherit;
+  font-size: 12.5px;
+  background: rgba(251, 248, 242, 0.05);
+  border: 1.5px solid rgba(251, 248, 242, 0.12);
+  border-radius: 999px;
+  color: rgba(251, 248, 242, 0.75);
+  cursor: pointer;
+  transition: all .12s ease;
+}
+.lp-auth .iv2-action:hover {
+  border-color: rgba(251, 248, 242, 0.3);
+  color: var(--paper);
+}
+.lp-auth .iv2-action.selected {
+  background: var(--lime);
+  border-color: var(--lime);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+/* The row table. Scrolls horizontally inside its own container so the
+   page body never does — candidates are on laptops and phones. */
+.lp-auth .iv2-rows-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(251, 248, 242, 0.1);
+  border-radius: var(--r-md);
+}
+.lp-auth .iv2-rows {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.lp-auth .iv2-rows th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(251, 248, 242, 0.45);
+  font-weight: 500;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(251, 248, 242, 0.12);
+  white-space: nowrap;
+}
+.lp-auth .iv2-rows td {
+  padding: 9px 12px;
+  border-bottom: 1px solid rgba(251, 248, 242, 0.06);
+  color: rgba(251, 248, 242, 0.85);
+  font-variant-numeric: tabular-nums;
+  vertical-align: middle;
+}
+.lp-auth .iv2-rows tr:last-child td { border-bottom: 0; }
+.lp-auth .iv2-rows tr.flagged td { background: rgba(214, 242, 77, 0.07); }
+.lp-auth .iv2-row-fix {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px 14px;
+  flex-wrap: wrap;
+}
+.lp-auth .iv2-row-fix .iv2-input { max-width: 190px; padding: 8px 10px; font-size: 13px; }
+.lp-auth .iv2-row-fix .iv2-select { max-width: 230px; }
+.lp-auth .iv2-flag {
+  width: 19px;
+  height: 19px;
+  border-radius: 5px;
+  border: 1.5px solid rgba(251, 248, 242, 0.25);
+  background: transparent;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+.lp-auth .iv2-flag.on { background: var(--lime); border-color: var(--lime); }
+.lp-auth .iv2-flag.on::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  background: var(--ink);
+  clip-path: polygon(14% 47%, 0 61%, 40% 100%, 100% 22%, 85% 8%, 38% 70%);
+}
+
+/* Clickable sentences. Click, not drag: a drag-select inside a 350-word
+   document is unusable on a trackpad at 320px, and click gives the key a
+   set of indices instead of character offsets. */
+.lp-auth .iv2-doc { margin-bottom: 20px; }
+.lp-auth .iv2-sentence {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  font-size: 14.5px;
+  line-height: 1.7;
+  color: rgba(251, 248, 242, 0.88);
+  background: transparent;
+  border: 0;
+  border-left: 3px solid transparent;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease;
+}
+.lp-auth .iv2-sentence:hover { background: rgba(251, 248, 242, 0.05); }
+.lp-auth .iv2-sentence.flagged {
+  background: rgba(214, 242, 77, 0.09);
+  border-left-color: var(--lime);
+}
+.lp-auth .iv2-sentence-n {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: rgba(251, 248, 242, 0.35);
+  margin-right: 10px;
+}
+.lp-auth .iv2-sentence-reason { padding: 0 12px 12px 27px; }
+.lp-auth .iv2-sentence-reason .iv2-select { max-width: 300px; }
+
+/* The soft deadline. It turns amber, then red. It never cuts anyone off:
+   a hard cut on a variable Philippine connection punishes the connection,
+   not the candidate. A late submission is accepted and recorded as late. */
+.lp-auth .iv2-deadline {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: rgba(251, 248, 242, 0.5);
+}
+.lp-auth .iv2-deadline.soon { color: var(--amber); }
+.lp-auth .iv2-deadline.over { color: rgba(251, 248, 242, 0.5); }
+
+.lp-auth .iv2-task-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 28px;
+  padding-top: 22px;
+  border-top: 1px solid rgba(251, 248, 242, 0.1);
+}
+.lp-auth .iv2-skip {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: rgba(251, 248, 242, 0.5);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.lp-auth .iv2-skip:hover { color: rgba(251, 248, 242, 0.8); }
+
+@media (max-width: 700px) {
+  .lp-auth .iv2-paper { font-size: 11.5px; padding: 16px 14px; }
+  .lp-auth .iv2-task-footer { flex-direction: column-reverse; align-items: stretch; }
+}

@@ -9,6 +9,11 @@ export interface TranscriptionResult {
   // distinguish bad audio from bad answers.
   confidence: number | null;
   durationSeconds: number | null;
+  /** Distinct speakers Deepgram heard in this turn (diarization). One is the
+   *  norm. Recorded as CONTEXT FOR A HUMAN reviewing a flagged session — never
+   *  a score input, and never a lockout: a television or a family member in
+   *  earshot produces this constantly. */
+  speakerCount: number | null;
 }
 
 export async function transcribeAudio(audioBuffer: ArrayBuffer | Buffer | Uint8Array): Promise<TranscriptionResult> {
@@ -38,7 +43,15 @@ export async function transcribeAudio(audioBuffer: ArrayBuffer | Buffer | Uint8A
   let response: Response;
   try {
     response = await fetch(
-      `${DEEPGRAM_API_URL}/listen?model=nova-3&smart_format=true&language=en`,
+      // diarize=true costs nothing extra — Deepgram returns speaker labels on the
+      // same request we already pay for — and without it a second voice in the
+      // room is transcribed as the candidate with no marker at all.
+      //
+      // What comes back is EVIDENCE FOR A HUMAN, never a score input. A shared
+      // room, a television, or a child in the background produces multi-speaker
+      // turns constantly, and a detector that rejects on that is the silence
+      // guard again: it auto-rejected 29% of candidates for our own audio.
+      `${DEEPGRAM_API_URL}/listen?model=nova-3&smart_format=true&language=en&diarize=true`,
       {
         method: "POST",
         headers: {
@@ -65,9 +78,17 @@ export async function transcribeAudio(audioBuffer: ArrayBuffer | Buffer | Uint8A
 
   const data = await response.json();
   const alt = data.results?.channels?.[0]?.alternatives?.[0];
+  // How many distinct speakers Deepgram heard in this turn. One is the norm.
+  const words = Array.isArray(alt?.words) ? alt.words : [];
+  const speakers = new Set(
+    words
+      .map((w: { speaker?: number }) => w.speaker)
+      .filter((n: unknown): n is number => typeof n === "number")
+  );
   return {
     text: alt?.transcript || "",
     confidence: typeof alt?.confidence === "number" ? alt.confidence : null,
     durationSeconds: typeof data.metadata?.duration === "number" ? data.metadata.duration : null,
+    speakerCount: speakers.size || null,
   };
 }

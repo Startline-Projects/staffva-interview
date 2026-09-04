@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyInterviewToken } from "@/lib/auth/verify-token";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { PROCTOR_CONSENT_VERSION } from "@/lib/proctorConsent";
 
 /**
  * Proctoring consent, interview-app side (the counsel draft requires the
@@ -8,7 +9,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
  * proctoring reaches the interview without a stamp).
  *
  * GET  ?token=  → { consented } — has this candidate's affirmative act
- *                been recorded at the current version?
+ *                been recorded at the current version? (2.1 — see
+ *                lib/proctorConsent for what that version covers.)
  * POST {token}  → stamp v2.0 with a timestamp at the act.
  */
 export async function GET(req: NextRequest) {
@@ -26,7 +28,7 @@ export async function GET(req: NextRequest) {
     .select("proctor_consent_version")
     .eq("id", candidateId)
     .single();
-  return NextResponse.json({ consented: data?.proctor_consent_version === "2.0" });
+  return NextResponse.json({ consented: data?.proctor_consent_version === PROCTOR_CONSENT_VERSION });
 }
 
 export async function POST(req: NextRequest) {
@@ -39,7 +41,7 @@ export async function POST(req: NextRequest) {
   if (typeof body.token !== "string") {
     return NextResponse.json({ error: "Missing token" }, { status: 400 });
   }
-  if (body.version !== "2.0") {
+  if (body.version !== PROCTOR_CONSENT_VERSION) {
     return NextResponse.json({ error: "Unknown consent version" }, { status: 400 });
   }
   let candidateId: string;
@@ -51,7 +53,7 @@ export async function POST(req: NextRequest) {
   const supabase = createSupabaseServiceClient();
   const { data, error } = await supabase
     .from("candidates")
-    .update({ proctor_consent_version: "2.0", proctor_consent_at: new Date().toISOString() })
+    .update({ proctor_consent_version: PROCTOR_CONSENT_VERSION, proctor_consent_at: new Date().toISOString() })
     .eq("id", candidateId)
     .select("id");
   if (error || !data?.length) {

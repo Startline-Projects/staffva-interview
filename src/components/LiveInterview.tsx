@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import { proctorLinkAttempt } from "@/lib/proctorBridge";
+import Iv2Task from "@/components/Iv2Task";
+import type { TaskBrief } from "@/lib/taskBank";
 
 interface LiveInterviewProps {
   token: string;
@@ -50,7 +52,7 @@ async function readError(response: Response): Promise<string> {
   }
 }
 
-type InterviewPhase = "starting" | "ai_speaking" | "listening" | "processing" | "complete" | "audio_failed" | "start_failed" | "interrupted";
+type InterviewPhase = "starting" | "ai_speaking" | "listening" | "processing" | "complete" | "audio_failed" | "start_failed" | "interrupted" | "task";
 
 interface ConversationEntry {
   role: "interviewer" | "candidate";
@@ -59,6 +61,13 @@ interface ConversationEntry {
 
 export default function LiveInterview({ token, candidateName, roleCategory, mediaStream }: LiveInterviewProps) {
   const [phase, setPhase] = useState<InterviewPhase>("starting");
+  // The role task. `brief` is whatever the server dealt; the answer key is
+  // never part of it. resumeAfterTaskRef holds the question the candidate was
+  // about to be asked, so the interview picks up exactly where it paused.
+  const [taskBrief, setTaskBrief] = useState<TaskBrief | null>(null);
+  const [taskServedAt, setTaskServedAt] = useState<string | null>(null);
+  const [taskConfident, setTaskConfident] = useState(true);
+  const resumeAfterTaskRef = useRef<string | null>(null);
   const [conversation, setConversation] = useState<ConversationEntry[]>([]);
   const [currentTranscript, setCurrentTranscript] = useState("");
   const [statusText, setStatusText] = useState("Starting your interview...");
@@ -183,6 +192,65 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
   }
 
   // Send candidate response to session API and get AI's next response
+  /** Speak a question, then open the mic. The ordinary turn ending. */
+  async function speakAndListen(text: string) {
+    setPhase("ai_speaking");
+    setStatusText("Alex is speaking...");
+    const heard = await playAIAudio(text);
+    if (!mountedRef.current) return;
+    if (!heard) {
+      setPhase("audio_failed");
+      setStatusText(
+        "We could not play the audio. Please read Alex's question above, then press I'm Ready to answer."
+      );
+      return;
+    }
+    startListening();
+  }
+
+  /**
+   * Ask the server for this interview's task. Returns false if there is not
+   * one to give — the route holds the real gate, so a "no" here is normal and
+   * must never strand the candidate.
+   */
+  async function openTask(currentInterviewId: string | null): Promise<boolean> {
+    if (!currentInterviewId) return false;
+    try {
+      setStatusText("Loading your task...");
+      const res = await fetch("/api/interview/task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, interviewId: currentInterviewId, action: "serve" }),
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      if (!data?.brief) return false;
+      if (!mountedRef.current) return false;
+      setTaskBrief(data.brief as TaskBrief);
+      setTaskServedAt(data.servedAt ?? null);
+      setTaskConfident(data.confident !== false);
+      setPhase("task");
+      setStatusText("");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The task is over, one way or another. Resume the held question. */
+  async function finishTask() {
+    setTaskBrief(null);
+    const held = resumeAfterTaskRef.current;
+    resumeAfterTaskRef.current = null;
+    if (!held) {
+      // Nothing was held — the task was opened outside a turn. Fall back to
+      // listening rather than leaving a dead screen.
+      startListening();
+      return;
+    }
+    await speakAndListen(held);
+  }
+
   async function sendResponse(transcript: string) {
     try {
       setPhase("processing");
@@ -247,23 +315,22 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
         setTimeout(() => {
           window.location.href = "/interview/results?id=" + currentInterviewId + "&token=" + token;
         }, 2000);
-      } else {
-        // Play AI response then start listening again
-        setPhase("ai_speaking");
-        setStatusText("Alex is speaking...");
-        const heard = await playAIAudio(data.response);
-
+      } else if (data.taskDue) {
+        // The role task interrupts BEFORE Alex's next question is spoken, and
+        // that question is held until the task is done. Speaking it first would
+        // leave a question hanging on screen through a seven-minute form, and
+        // the candidate would come back to a prompt they no longer remember.
+        resumeAfterTaskRef.current = data.response;
+        const opened = await openTask(currentInterviewId);
         if (!mountedRef.current) return;
-
-        if (!heard) {
-          setPhase("audio_failed");
-          setStatusText(
-            "We could not play the audio. Please read Alex's question above, then press I'm Ready to answer."
-          );
-          return;
+        if (!opened) {
+          // The task could not be dealt. That is ours, not theirs: carry on
+          // with the conversation and let the scorer be told nothing about a
+          // task that never existed.
+          await speakAndListen(data.response);
         }
-
-        startListening();
+      } else {
+        await speakAndListen(data.response);
       }
     } catch (err) {
       console.error("sendResponse error:", err);
@@ -608,8 +675,38 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
 
   const firstName = candidateName.split(" ")[0];
 
+  // The task is a fullscreen takeover on top of the conversation, which is
+  // how Atlas stages it too. It keeps the held question and the transcript
+  // mounted underneath, so finishing the task resumes rather than remounts.
+  const taskOverlay =
+    phase === "task" && taskBrief && interviewIdRef.current ? (
+      <div className="lp lp-auth">
+        <div className="test-fullscreen" role="dialog" aria-label="Interview task">
+          {/* No Recording chip here: ProctorGate's own indicator now renders
+              above this overlay (z-[300]) and carries the live self-view, so a
+              second one would be two chips claiming the same thing. */}
+          <div className="test-topbar">
+            <span className="test-progress-indicator">Hands-on task</span>
+          </div>
+          <div className="test-body task-body">
+            <Iv2Task
+              token={token}
+              interviewId={interviewIdRef.current}
+              brief={taskBrief}
+              servedAt={taskServedAt}
+              confident={taskConfident}
+              onDone={() => {
+                void finishTask();
+              }}
+            />
+          </div>
+        </div>
+      </div>
+    ) : null;
+
   return (
     <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+      {taskOverlay}
       {/* Top bar */}
       <div className="border-b border-gray-800 px-6 py-4 flex items-center justify-between">
         <div>

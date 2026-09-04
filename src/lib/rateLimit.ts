@@ -36,6 +36,14 @@ export const LIMITS = {
   // Interview 1 session starts: a candidate legitimately starts once, maybe
   // resumes a handful of times after refreshes.
   iv1Session: { limit: 15, windowSeconds: 3600 },
+  // The Interview 2 task: served once, submitted once, plus resumes after a
+  // refresh. Generous enough that a bad connection never locks someone out of
+  // a task they are mid-way through, tight enough that the serve endpoint is
+  // not a brief-harvesting oracle.
+  task: { limit: 20, windowSeconds: 3600 },
+  // Focus/paste telemetry. A tab-switching candidate legitimately generates a
+  // lot of these; the cap only stops a loop.
+  taskEvents: { limit: 200, windowSeconds: 3600 },
 } satisfies Record<string, RateLimit>;
 
 /**

@@ -5,6 +5,7 @@ import { useEffect, useState, useRef, useCallback, Suspense } from "react";
 import LiveInterview from "@/components/LiveInterview";
 import ProctorGate from "@/components/ProctorGate";
 import Interview1Flow from "@/components/Interview1Flow";
+import Iv2RoleTips from "@/components/Iv2RoleTips";
 
 interface Candidate {
   id: string;
@@ -193,7 +194,7 @@ function InterviewContent() {
   // records for the whole interview.
   if (pageState === "interview" && token && candidate && streamRef.current) {
     return (
-      <ProctorGate token={token}>
+      <ProctorGate token={token} micStream={streamRef.current}>
         <LiveInterview
           token={token}
           candidateName={candidate.display_name}
@@ -220,10 +221,13 @@ function InterviewContent() {
           <p className="text-gray-400 leading-relaxed">
             You will have a voice conversation with Alex, our AI interviewer. Alex will ask you
             questions about your experience and skills related to your role. The interview typically
-            takes 10 to 20 minutes. Speak naturally — this is a conversation, not a test with
-            right or wrong answers.
+            takes 10 to 20 minutes. Speak naturally — most of it is a conversation, and there
+            are no trick questions. Partway through, Alex will pause and give you one short
+            hands-on task based on the kind of work you do.
           </p>
         </div>
+
+        <Iv2RoleTips roleCategory={candidate?.role_category ?? null} />
 
         <div className="bg-gray-900 rounded-xl p-6 mb-6">
           <h2 className="text-xl font-semibold mb-4">Before You Start</h2>

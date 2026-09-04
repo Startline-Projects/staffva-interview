@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { PROCTOR_CONSENT_VERSION } from "@/lib/proctorConsent";
 
 /**
  * The proctor-session protocol for Interview 1's Atlas flow — the same
@@ -162,7 +163,11 @@ export function useIv1Proctor(token: string) {
     const res = await fetch("/api/proctor/consent", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token, version: "2.0" }),
+      // 2.1 adds room audio to the Interview 2 recording. Interview 1 already
+      // captured and disclosed it, so nothing changes here except the stamp —
+      // but the stamp has to move together or one app writes a version the
+      // consent route rejects.
+      body: JSON.stringify({ token, version: PROCTOR_CONSENT_VERSION }),
     });
     return res.ok;
   }, [token]);

@@ -6,6 +6,17 @@ import { isFatalVendorError, recordVendorFailure } from "@/lib/vendorFailure";
 import { v4 as uuidv4 } from "uuid";
 import { interviewDepthFor } from "@/lib/interviewDepth";
 
+/**
+ * How many interviewer turns before the role task appears.
+ *
+ * Late enough that Alex has established what the candidate claims to do — the
+ * task is meant to test those claims, and a task served before them tests
+ * nothing — and late enough that a script cannot POST for the brief the moment
+ * a token is minted. The task route enforces the same floor independently; this
+ * constant only decides when the client is told to ask.
+ */
+const TASK_AFTER_QUESTIONS = 5;
+
 interface ConversationEntry {
   role: "interviewer" | "candidate";
   text: string;
@@ -366,6 +377,25 @@ async function handleRespond(supabase: any, candidate: Record<string, unknown>, 
     interviewId,
     response: claudeResponse.text,
     isComplete: claudeResponse.isComplete,
+    // Is it time for the role task? The client does not decide this and does
+    // not poll for it — the task route holds the real gate (questions asked,
+    // write-once claim) and will still refuse if this is wrong. This flag only
+    // saves a round trip per turn.
+    //
+    // Never on the closing turn: interrupting Alex's wrap-up with a form is
+    // both jarring and unrecoverable, since the interview is already completed
+    // by the time the task would submit.
+    // `served` is included on purpose. A task that was dealt but never
+    // submitted — the candidate refreshed, the tab crashed, the serve response
+    // was lost in flight — is still owed to them. Gating only on "no variant
+    // yet" burned the task silently: the row had a variant, so it never came
+    // back, and the interview finished with task_status stuck at 'served' and
+    // nothing scored. The serve handler is idempotent and rebuilds the same
+    // brief from the stored seed, so re-offering it is safe.
+    taskDue:
+      !claudeResponse.isComplete &&
+      (!interview.task_variant || interview.task_status === "served") &&
+      questionsAsked >= TASK_AFTER_QUESTIONS,
   });
 }
 

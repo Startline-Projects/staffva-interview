@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "verify:tasks": "node scripts/verify-role-task.mjs && node scripts/verify-task-bank.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.80.0",
