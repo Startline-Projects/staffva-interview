@@ -539,7 +539,13 @@ export default function Interview1Flow({
                     </div>
                   </div>
                   <div className="ai-greeting-text">
-                    <span className="ai-greeting-typing">{greeting.slice(0, typedChars)}</span>
+                    {/* The caret is a "still talking" signal — it has to stop
+                        when Alex does, or it reads as more text coming. */}
+                    <span
+                      className={typedChars < greeting.length ? "ai-greeting-typing" : undefined}
+                    >
+                      {greeting.slice(0, typedChars)}
+                    </span>
                   </div>
                   <button
                     type="button"
@@ -908,6 +914,10 @@ export default function Interview1Flow({
                       Each question gives you <strong>20-25 seconds to think</strong>, then
                       <strong> 90-120 seconds to answer</strong>. Both are on a timer.
                     </li>
+                    <li>
+                      You may get <strong>one short follow-up</strong> on something you said —
+                      20 seconds to think, 60 to answer.
+                    </li>
                     <li>You answer by speaking — tap the microphone when you&apos;re ready.</li>
                     <li>No second screens, phones, or notes visible.</li>
                     <li>No other people audible or visible in the room.</li>
@@ -989,12 +999,20 @@ export default function Interview1Flow({
               <div className="signin-state state-centered">
                 <div className="ai-orb-stage">
                   <Orb state="listening" />
-                  <div className="ai-orb-label">Your interviewer · idle</div>
+                  <div className="ai-orb-label">
+                    Your interviewer · {error ? "unavailable" : "idle"}
+                  </div>
                 </div>
-                <h2 className="state-title">Your interviewer is ready</h2>
+                {/* A failed start puts an error under this heading — so the
+                    heading must stop claiming Alex is ready, or the card
+                    contradicts itself in two adjacent lines. */}
+                <h2 className="state-title">
+                  {error ? "We couldn't reach your interviewer" : "Your interviewer is ready"}
+                </h2>
                 <p className="state-subtitle">
-                  You&apos;ll get 5 questions. Each one gives you prep time, then answer time —
-                  and you may get one short follow-up based on something you say.
+                  {error
+                    ? "This is on our side, not yours."
+                    : "You'll get 5 questions. Each one gives you prep time, then answer time — and you may get one short follow-up based on something you say."}
                 </p>
                 {error && (
                   <div className="field-error-text" role="alert" style={{ display: "block", marginBottom: "12px" }}>
@@ -1008,7 +1026,9 @@ export default function Interview1Flow({
                   disabled={busy}
                   onClick={handleStart}
                 >
-                  <span className="submit-label">Meet your interviewer</span>
+                  <span className="submit-label">
+                    {error ? "Try again" : "Meet your interviewer"}
+                  </span>
                   <span className="spinner" aria-hidden></span>
                 </button>
                 <p className="state-fine-print">

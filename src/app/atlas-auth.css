@@ -3711,6 +3711,9 @@
 .lp-auth .ai-greeting-card {
   max-width: 560px;
   width: 100%;
+  /* The parent is a block, not a flex row — without this the card sits
+     flush left inside it and the whole greeting reads 32px off-centre. */
+  margin-inline: auto;
   text-align: center;
   padding: 20px 24px;
 }
