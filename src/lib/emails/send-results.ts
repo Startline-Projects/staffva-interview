@@ -1,5 +1,26 @@
 import { Resend } from "resend";
 
+/**
+ * THE CANDIDATE EMAIL FREEZE APPLIES HERE TOO.
+ *
+ * The platform repo enforces the owner's freeze in src/lib/emailFreeze.ts:
+ * every automated candidate send is suppressed until the owner tests and
+ * lifts it. This app has its own Resend client, so those walls do not reach
+ * it — and the step-18 audit found that the moment interviews run again,
+ * every pass/fail/technical outcome would mail candidates an untested email
+ * the owner never approved, making the platform's notification matrix a
+ * false inventory.
+ *
+ * Same rule as the platform's allowlist, expressed as a switch this repo can
+ * see: sends are OFF unless CANDIDATE_EMAILS_ENABLED=true. The interview
+ * results themselves are not lost — the platform dashboard reads the same
+ * rows these emails describe, which is the delivery surface the freeze
+ * relies on everywhere else.
+ */
+function candidateEmailsFrozen(): boolean {
+  return process.env.CANDIDATE_EMAILS_ENABLED !== "true";
+}
+
 interface InterviewData {
   overall_score: number;
   badge_level: string;
@@ -41,6 +62,10 @@ function dimensionRow(label: string, score: number, feedback: string): string {
 }
 
 export async function sendCandidateResultsEmail(candidate: CandidateData, interview: InterviewData) {
+  if (candidateEmailsFrozen()) {
+    console.log("[emails] suppressed by candidate freeze: sendCandidateResultsEmail");
+    return;
+  }
   if (!candidate.email) return;
 
   const resend = new Resend(process.env.RESEND_API_KEY);
@@ -90,6 +115,10 @@ export async function sendFailEmail(
   score: number,
   kind: "behavioral" | "skills" = "skills"
 ) {
+  if (candidateEmailsFrozen()) {
+    console.log("[emails] suppressed by candidate freeze: sendFailEmail");
+    return;
+  }
   if (!candidate.email) return;
 
   const resend = new Resend(process.env.RESEND_API_KEY);
@@ -129,6 +158,10 @@ export async function sendFailEmail(
  * results page open they were never told anything had gone wrong.
  */
 export async function sendTechnicalIssueEmail(candidate: CandidateData) {
+  if (candidateEmailsFrozen()) {
+    console.log("[emails] suppressed by candidate freeze: sendTechnicalIssueEmail");
+    return;
+  }
   if (!candidate.email) return;
 
   const resend = new Resend(process.env.RESEND_API_KEY);
@@ -172,6 +205,10 @@ export async function sendTechnicalIssueEmail(candidate: CandidateData) {
  * all, which it previously was not.
  */
 export async function sendIv1PassEmail(candidate: CandidateData, score: number) {
+  if (candidateEmailsFrozen()) {
+    console.log("[emails] suppressed by candidate freeze: sendIv1PassEmail");
+    return;
+  }
   if (!candidate.email) return;
 
   const resend = new Resend(process.env.RESEND_API_KEY);

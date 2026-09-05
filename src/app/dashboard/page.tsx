@@ -44,6 +44,12 @@ export default async function RecruiterDashboard() {
     .from("ai_interviews")
     .select("id, candidate_id, role_category, overall_score, badge_level, passed, completed_at")
     .eq("passed", true)
+    // Skills exams only. Behavioral (Interview 1) rows share this table, and
+    // today they are excluded only by ACCIDENT — their role_category is NULL,
+    // so the .in() filter drops them. The day a backfill gives them one,
+    // situational-judgment scores would appear in this queue read as skills
+    // scores. Pin the kind, like every other skills-only surface.
+    .eq("kind", "skills")
     .in("role_category", assignedCategories.length > 0 ? assignedCategories : ["__none__"])
     .order("completed_at", { ascending: false });
 
