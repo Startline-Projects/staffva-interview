@@ -168,7 +168,7 @@ async function performScoring(
   // Load candidate
   const { data: candidate } = await supabase
     .from("candidates")
-    .select("id, display_name, role_category, country, email")
+    .select("id, display_name, role_category, country, email, admin_status")
     .eq("id", candidateId)
     .single();
 
@@ -355,7 +355,15 @@ async function performScoring(
       // score and badge along with the status. We never write that status now,
       // so the trigger cannot fire on this path and the strand it guarded
       // against is gone.
-      ...(passed ? {} : { admin_status: "ai_interview_failed" }),
+      // Failing an OPTIONAL interview must not unlist a live candidate.
+      // Writing 'ai_interview_failed' over 'approved' pulls them out of the
+      // marketplace — the same trap 00220 closed on the English side, just
+      // through admin_status instead of permanently_blocked. Only demote from
+      // the pre-live statuses; an approved candidate keeps their listing and
+      // simply doesn't earn the Vetted badge.
+      ...(passed || candidate?.admin_status === "approved"
+        ? {}
+        : { admin_status: "ai_interview_failed" }),
       ai_interview_retake_notified_at: null,
     })
     .eq("id", candidateId);
