@@ -162,13 +162,36 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
   // Retire anything older before looking, so the candidate falls through to a
   // fresh interview rather than being pinned. failed_technical is the same
   // state used for interviews parked for human review.
-  await supabase
+  const { data: retired } = await supabase
     .from("ai_interviews")
     .update({ status: "failed_technical", parked_reason: "stale_abandoned" })
     .eq("candidate_id", candidate.id)
     .eq("kind", "skills")
     .eq("status", "in_progress")
-    .lt("created_at", staleCutoff);
+    .lt("created_at", staleCutoff)
+    .select("id");
+
+  // Hand the sitting back rather than leaving it attached to an interview
+  // nobody can resume. Without this the candidate is in a dead end: the
+  // purchase stays claimed by a retired interview, the resume lookup below
+  // excludes it by the same staleness bound, and the payment gate refuses a
+  // fresh start — $5 spent on an interview they never got to finish.
+  //
+  // Conditional on something actually having been retired. An unconditional
+  // release would also unhook the claim from a HEALTHY in-progress interview,
+  // which resumes fine but then leaves the purchase free to start a second
+  // interview later — one payment, two sittings.
+  //
+  // Bounded, not unlimited: release_assessment_entitlement settles the
+  // purchase after a couple of re-offers, so this cannot become a way to walk
+  // through the question bank for free.
+  if (retired && retired.length > 0) {
+    await supabase.rpc("release_assessment_entitlement", {
+      p_candidate_id: candidate.id,
+      p_kind: "interview",
+      p_reason: "stale_abandoned",
+    });
+  }
 
   const { data: existing } = await supabase
     .from("ai_interviews")
@@ -219,6 +242,34 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
     }
   }
 
+  // ═══ PAYMENT GATE ═══
+  // The skills interview is optional and paid on the platform side. This runs
+  // AFTER the resume branch above returns, so a candidate who paid and got
+  // disconnected resumes for free — they are charged for a sitting, not for
+  // each time their connection drops.
+  // "Live purchase" is paid, unsettled and unrefunded — NOT "unclaimed". A
+  // purchase claimed by an interview in progress still belongs to the
+  // candidate, so a reconnect inside the resume window is free.
+  const { data: entitlement } = await supabase
+    .from("assessment_purchases")
+    .select("id")
+    .eq("candidate_id", candidate.id)
+    .eq("kind", "interview")
+    .eq("status", "paid")
+    .is("consumed_at", null)
+    .is("refunded_at", null)
+    .maybeSingle();
+
+  if (!entitlement) {
+    return NextResponse.json(
+      {
+        error: "This interview hasn't been paid for yet.",
+        paymentRequired: true,
+      },
+      { status: 402 }
+    );
+  }
+
   const { count } = await supabase
     .from("interview_attempts")
     .select("*", { count: "exact", head: true })
@@ -244,6 +295,23 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
 
   if (insertError) {
     return NextResponse.json({ error: "Failed to create interview: " + insertError.message }, { status: 500 });
+  }
+
+  // Attach the purchase to this interview — claim, not spend. The money is
+  // settled when the interview is scored; until then the candidate still
+  // holds a live purchase, so a dropped connection, a stale session, or a
+  // vendor error at question one does not cost them $5.
+  const { data: claimedId } = await supabase.rpc("claim_assessment_entitlement", {
+    p_candidate_id: candidate.id,
+    p_kind: "interview",
+    p_attempt_id: interviewId,
+  });
+
+  if (!claimedId) {
+    console.warn(
+      "[interview-session] interview " + interviewId + " created for candidate " + candidate.id +
+      " but no entitlement was claimed (raced); allowing it to stand"
+    );
   }
 
   await supabase.from("interview_attempts").insert({

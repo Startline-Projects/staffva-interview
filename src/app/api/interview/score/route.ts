@@ -312,6 +312,49 @@ async function performScoring(
       context: { interviewId: interview.id, candidateId, score: scorecard.overall_score },
     });
 
+    // Make them whole.
+    //
+    // This branch is, by its own definition, "our audio pipeline lost their
+    // answers". Under the old free model that cost the candidate an attempt;
+    // now it costs them $5. Measured against production, 29% of candidates
+    // had their first answer recorded as silence — so this is not an edge
+    // case, it is a line item, and a marketplace that charges people to be
+    // failed by its own bug is running a scam.
+    //
+    // Try the sitting back FIRST, and refund only if we can't. Someone who
+    // paid $5 wanted the interview, not the $5 — handing back the sitting
+    // gives them what they came for, and a refund leaves them with nothing
+    // and a bad afternoon. release_assessment_entitlement returns null when
+    // the re-offer budget is spent, and that is when money is the only
+    // remedy left.
+    const { data: released } = await supabase.rpc("release_assessment_entitlement", {
+      p_candidate_id: candidateId,
+      p_kind: "interview",
+      p_reason: "platform_failure_silent_answers",
+    });
+
+    if (released) {
+      console.log(
+        "[interview-score] released sitting on purchase " + released +
+        " (candidate " + candidateId + ") — parked for silent_answers, they can sit it again"
+      );
+    } else {
+      // No re-offer left, or nothing claimed. Record the debt; the platform's
+      // refund worker settles it with Stripe. That split is what makes the
+      // obligation survive this request dying halfway.
+      const { data: flagged } = await supabase.rpc("flag_assessment_refund", {
+        p_candidate_id: candidateId,
+        p_kind: "interview",
+        p_reason: "platform_failure",
+      });
+      if (flagged) {
+        console.log(
+          "[interview-score] flagged refund for purchase " + flagged +
+          " (candidate " + candidateId + ") — parked for silent_answers, no re-offer left"
+        );
+      }
+    }
+
     // Tell them. This return skips the results email below, so a parked
     // candidate previously heard nothing at all — the interview simply ended
     // and no message ever arrived. Refusing to reject someone is only an
@@ -334,6 +377,14 @@ async function performScoring(
 
     return;
   }
+
+  // The interview was delivered and scored — settle the purchase. This is the
+  // point the $5 is actually spent; before it the sitting was only claimed,
+  // which is what makes a dropped connection or a vendor error mid-interview
+  // recoverable instead of a $5 loss.
+  await supabase.rpc("settle_assessment_entitlement", {
+    p_attempt_id: interview.id as string,
+  });
 
   // Write back to candidates table immediately after ai_interviews update
   const { error: candidateUpdateError } = await supabase
