@@ -250,6 +250,48 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
   // "Live purchase" is paid, unsettled and unrefunded — NOT "unclaimed". A
   // purchase claimed by an interview in progress still belongs to the
   // candidate, so a reconnect inside the resume window is free.
+  const { data: livePurchase } = await supabase
+    .from("assessment_purchases")
+    .select("id, attempt_id")
+    .eq("candidate_id", candidate.id)
+    .eq("kind", "interview")
+    .eq("status", "paid")
+    .is("consumed_at", null)
+    .is("refunded_at", null)
+    .maybeSingle();
+
+  // ═══ RESOLVE A CLAIM LEFT ON A DEAD INTERVIEW ═══
+  //
+  // Reaching here means the resume branch found nothing resumable, so the
+  // interview this purchase is claimed by is over or abandoned. The claim must
+  // be resolved before starting a new one: claim_assessment_entitlement only
+  // matches a purchase whose attempt_id is NULL or equal to the interview
+  // being created, so a stuck claim makes every future claim fail — and this
+  // route lets a failed claim stand, which would turn one $5 into unlimited
+  // interviews.
+  //
+  // The stale sweep above already releases when it retires an in_progress
+  // interview. This covers what the sweep cannot see: an interview that
+  // reached 'completed' but was never scored (the scorer is what settles), so
+  // nothing else would ever free or spend the claim.
+  if (livePurchase?.attempt_id) {
+    const { data: claimedInterview } = await supabase
+      .from("ai_interviews")
+      .select("id, status")
+      .eq("id", livePurchase.attempt_id)
+      .maybeSingle();
+
+    // A row still in_progress here was just retired by the sweep, which
+    // released it; anything else is finished and the sitting was delivered.
+    if (!claimedInterview || claimedInterview.status !== "in_progress") {
+      await supabase.rpc("settle_assessment_entitlement", {
+        p_attempt_id: livePurchase.attempt_id,
+      });
+    }
+  }
+
+  // Re-read, requiring an UNCLAIMED purchase — only a free one starts a
+  // sitting.
   const { data: entitlement } = await supabase
     .from("assessment_purchases")
     .select("id")
@@ -258,6 +300,7 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
     .eq("status", "paid")
     .is("consumed_at", null)
     .is("refunded_at", null)
+    .is("attempt_id", null)
     .maybeSingle();
 
   if (!entitlement) {
