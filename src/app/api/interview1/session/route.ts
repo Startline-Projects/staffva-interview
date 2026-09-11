@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { verifyInterviewToken } from "@/lib/auth/verify-token";
 import { enforceRateLimit, LIMITS } from "@/lib/rateLimit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { recordVendorFailure } from "@/lib/vendorFailure";
 import { dealIv1Plan } from "@/lib/iv1Questions";
 import {
   isTokenError,
@@ -38,11 +39,31 @@ export async function POST(request: NextRequest) {
     if (limited) return limited;
 
     const supabase = createSupabaseServiceClient();
-    const { data: candidate } = await supabase
+    const { data: candidate, error: candidateError } = await supabase
       .from("candidates")
-      .select("id, display_name, interview1_passed, ai_interview_passed")
+      // role_category is selected because ai_interviews.role_category is
+      // NOT NULL with no default. Behavioral questions do not vary by role,
+      // but the row still has to carry one.
+      .select("id, display_name, role_category, interview1_passed, ai_interview_passed")
       .eq("id", payload.candidate_id)
       .single();
+    // PGRST116 is "no row", which really is a 404. Anything else — a
+    // connection failure, a PostgREST 5xx, a statement timeout — is OURS, and
+    // reporting it as 404 was not cosmetic: LiveInterview gates its Retry
+    // button on `status !== 404`, so a transient database blip dead-ended the
+    // candidate permanently under a message saying they do not exist.
+    if (candidateError && candidateError.code !== "PGRST116") {
+      await recordVendorFailure({
+        vendor: "supabase",
+        operation: "interview1.session.candidate_lookup",
+        error: new Error(candidateError.message),
+        context: { candidate_id: payload.candidate_id, code: candidateError.code },
+      });
+      return NextResponse.json(
+        { error: "We couldn't reach your details just now. Please try again." },
+        { status: 500 }
+      );
+    }
     if (!candidate) {
       return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
     }
@@ -115,6 +136,11 @@ export async function POST(request: NextRequest) {
     const { error: insertError } = await supabase.from("ai_interviews").insert({
       id: interviewId,
       candidate_id: candidate.id,
+      // NOT NULL on ai_interviews, and omitting it here meant EVERY behavioral
+      // interview failed at the insert — the candidate got the raw constraint
+      // error on screen and no interview 1 row has ever existed. Behavioral
+      // questions are role-agnostic, so this is bookkeeping, not a selector.
+      role_category: candidate.role_category,
       kind: "behavioral",
       status: "in_progress",
       question_plan: plan,
@@ -123,8 +149,21 @@ export async function POST(request: NextRequest) {
       turn_count: 1,
     });
     if (insertError) {
+      // The candidate must never read Postgres. Record the real fault where
+      // alerting looks, and tell them the one thing they need to know.
+      await recordVendorFailure({
+        vendor: "supabase",
+        operation: "interview1.session.create",
+        error: new Error(insertError.message),
+        fatal: true,
+        context: {
+          candidate_id: candidate.id,
+          code: insertError.code,
+          details: insertError.details,
+        },
+      });
       return NextResponse.json(
-        { error: "Failed to create interview: " + insertError.message },
+        { error: "We couldn't start your interview just now. Nothing has been used up — please try again." },
         { status: 500 }
       );
     }

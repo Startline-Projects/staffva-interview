@@ -91,7 +91,24 @@ export async function POST(request: NextRequest) {
       .eq("id", payload.candidate_id)
       .single();
 
-    if (candidateError || !candidate) {
+    // PGRST116 is "no row", which really is a 404. Anything else — a
+    // connection failure, a PostgREST 5xx, a statement timeout — is OURS, and
+    // reporting it as 404 was not cosmetic: LiveInterview gates its Retry
+    // button on `status !== 404`, so a transient database blip dead-ended the
+    // candidate permanently under a message saying they do not exist.
+    if (candidateError && candidateError.code !== "PGRST116") {
+      await recordVendorFailure({
+        vendor: "supabase",
+        operation: "interview.session.candidate_lookup",
+        error: new Error(candidateError.message),
+        context: { candidate_id: payload.candidate_id, code: candidateError.code },
+      });
+      return NextResponse.json(
+        { error: "We couldn't reach your details just now. Please try again." },
+        { status: 500 }
+      );
+    }
+    if (!candidate) {
       return NextResponse.json({ error: "Candidate not found" }, { status: 404 });
     }
 
@@ -337,7 +354,24 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
   });
 
   if (insertError) {
-    return NextResponse.json({ error: "Failed to create interview: " + insertError.message }, { status: 500 });
+    // Same rule as interview 1: the candidate never reads Postgres. The
+    // purchase is claimed AFTER this insert, so a failure here leaves their
+    // paid sitting untouched — which is the thing they will want to know.
+    await recordVendorFailure({
+      vendor: "supabase",
+      operation: "interview.session.create",
+      error: new Error(insertError.message),
+      fatal: true,
+      context: {
+        candidate_id: candidate.id,
+        code: insertError.code,
+        details: insertError.details,
+      },
+    });
+    return NextResponse.json(
+      { error: "We couldn't start your interview just now. Your paid sitting has not been used — please try again." },
+      { status: 500 }
+    );
   }
 
   // Attach the purchase to this interview — claim, not spend. The money is

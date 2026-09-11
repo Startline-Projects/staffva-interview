@@ -296,13 +296,33 @@ export async function scoreIv1(
       .select("*", { count: "exact", head: true })
       .eq("candidate_id", interview.candidate_id)
       .eq("kind", "behavioral");
-    await supabase.from("interview_attempts").insert({
+    // This row is the ONLY writer of the behavioral retake window, and its
+    // error used to be discarded. If it failed, the candidate saw an ordinary
+    // "you did not pass" while the lock was never armed — and the gate in
+    // interview1/session reads the newest attempt row, which would then be the
+    // START row that deliberately carries next_retake_available_at: null. The
+    // gate opens, and they retake immediately, walking the question bank.
+    // Never exercised until now: no behavioral interview had ever been created.
+    const { error: attemptError } = await supabase.from("interview_attempts").insert({
       candidate_id: interview.candidate_id,
       attempt_number: (count || 0) + 1,
       ai_interview_id: interview.id,
       kind: "behavioral",
       next_retake_available_at: retakeAt,
     });
+    if (attemptError) {
+      await recordVendorFailure({
+        vendor: "supabase",
+        operation: "iv1Score.retake_lock",
+        error: new Error(attemptError.message),
+        fatal: true,
+        context: {
+          candidate_id: interview.candidate_id,
+          interview_id: interview.id,
+          code: attemptError.code,
+        },
+      });
+    }
     const { data: candidate } = await supabase
       .from("candidates")
       .select("email, display_name")
