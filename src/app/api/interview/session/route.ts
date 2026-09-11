@@ -307,6 +307,32 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
     }
   }
 
+  // First sitting free, retakes paid (20260911201321). This grants the free
+  // entitlement through the same table a purchase writes to, so everything
+  // below — the unclaimed re-read, claim, settle, the release cap — is
+  // unchanged and cannot tell the two apart. It returns null and writes
+  // nothing once the candidate has spent their free go on a sitting that
+  // actually completed, which is what makes a retake paid.
+  const { error: grantErr } = await supabase.rpc("grant_free_assessment_sitting", {
+    p_candidate_id: candidate.id,
+    p_kind: "interview",
+  });
+  if (grantErr) {
+    // Falling through would hit the 402 below and tell a first-timer their
+    // free interview had been used — false, and it sends them to pay $5 for
+    // something they are owed.
+    await recordVendorFailure({
+      vendor: "supabase",
+      operation: "interview.session.grant_free_sitting",
+      error: new Error(grantErr.message),
+      context: { candidate_id: candidate.id },
+    });
+    return NextResponse.json(
+      { error: "We couldn't start your interview just now. Please try again." },
+      { status: 503 }
+    );
+  }
+
   // Re-read, requiring an UNCLAIMED purchase — only a free one starts a
   // sitting.
   const { data: entitlement } = await supabase
@@ -323,7 +349,11 @@ async function handleStart(supabase: any, candidate: Record<string, unknown>) {
   if (!entitlement) {
     return NextResponse.json(
       {
-        error: "This interview hasn't been paid for yet.",
+        // Reaching here means the free sitting is already spent on an
+        // interview that completed — so this is a retake, and saying "hasn't
+        // been paid for" would read as a billing fault to someone who was
+        // never asked for money the first time.
+        error: "Your free interview has been used. Retakes are $5.",
         paymentRequired: true,
       },
       { status: 402 }

@@ -798,7 +798,13 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
             </button>
           )}
 
+          {/* 402 joins 403/404 as a status a reload cannot fix. Retrying does
+              not create an entitlement, so the candidate in that state was
+              pressing a button that could never work — now that retakes are
+              the only thing charged for, the answer is the dashboard, where
+              the Buy button is. */}
           {phase === "start_failed" &&
+            startFailStatusRef.current !== 402 &&
             startFailStatusRef.current !== 403 &&
             startFailStatusRef.current !== 404 && (
               <button
@@ -810,12 +816,14 @@ export default function LiveInterview({ token, candidateName, roleCategory, medi
             )}
 
           {phase === "start_failed" &&
-            (startFailStatusRef.current === 403 || startFailStatusRef.current === 404) && (
+            (startFailStatusRef.current === 402 ||
+              startFailStatusRef.current === 403 ||
+              startFailStatusRef.current === 404) && (
               <a
                 href="https://staffva.com/candidate/dashboard"
                 className="inline-block px-10 py-4 bg-gray-700 hover:bg-gray-600 rounded-xl font-semibold text-lg transition-colors"
               >
-                Back to StaffVA
+                {startFailStatusRef.current === 402 ? "Go to your dashboard" : "Back to StaffVA"}
               </a>
             )}
 
