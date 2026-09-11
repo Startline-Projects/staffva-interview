@@ -118,6 +118,12 @@ export default function Interview1Flow({
   const turnRef = useRef<Turn | null>(null);
   const phaseTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const uploadFailedRef = useRef(false);
+  /** The mic could not be opened, so the answer clock is frozen and the
+   *  recovery control is on screen. Their time must not drain while the
+   *  thing stopping them is on our side. */
+  const [micBlocked, setMicBlocked] = useState(false);
+  const micBlockedRef = useRef(false);
+  const [micRetrying, setMicRetrying] = useState(false);
   const submittingTurnRef = useRef(false);
   const failedBlobRef = useRef<Blob | null>(null);
 
@@ -295,6 +301,14 @@ export default function Interview1Flow({
     setPhaseLeft(q.answerSeconds);
     stopPhaseTimer();
     phaseTimerRef.current = setInterval(() => {
+      // Frozen, not merely un-submitted: while the mic cannot be opened the
+      // candidate can do nothing, so pushing the deadline holds their
+      // remaining time exactly where it was. Letting it drain meant OUR
+      // failure spent their answer window and then submitted the silence.
+      if (micBlockedRef.current) {
+        phaseDeadlineRef.current += 400;
+        return;
+      }
       const left = Math.round((phaseDeadlineRef.current - Date.now()) / 1000);
       setPhaseLeft(left);
       if (left <= 0) {
@@ -326,12 +340,43 @@ export default function Interview1Flow({
     if (recState !== "idle") return;
     const rec = proctor.recordAnswer();
     if (!rec) {
-      setError("Your microphone disconnected. Reconnect it to continue.");
+      // Name the actual cause. "Your microphone disconnected" was asserted
+      // for all three, and for two of them it is false — the candidate was
+      // told to reconnect hardware that had never been unplugged.
+      const problem = proctor.micProblem();
+      setError(
+        problem === "track_ended"
+          ? "Your microphone stopped. Reconnect it, or use the button below to try again — your time is paused."
+          : problem === "no_track"
+          ? "We can't see a microphone on this device. Check it's selected for this site, then try again — your time is paused."
+          : "We lost access to your microphone. Use the button below to reconnect — your time is paused."
+      );
+      micBlockedRef.current = true;
+      setMicBlocked(true);
       return;
     }
+    micBlockedRef.current = false;
+    setMicBlocked(false);
     recorderRef.current = rec;
     recStartRef.current = Date.now();
     setRecState("recording");
+  }
+
+  /** Re-acquire the stream and unfreeze, mirroring the camera's recovery.
+   *  The old message told candidates to "reconnect" with nothing on screen
+   *  that could do it. */
+  async function handleMicReconnect() {
+    if (micRetrying) return;
+    setMicRetrying(true);
+    const ok = await proctor.reconnectCamera();
+    setMicRetrying(false);
+    if (ok && !proctor.micProblem()) {
+      micBlockedRef.current = false;
+      setMicBlocked(false);
+      setError("");
+      return;
+    }
+    setError("Still no microphone. Check this site's permissions in your browser, then try again — your time is paused.");
   }
 
   const submitTurn = useCallback(
@@ -350,6 +395,25 @@ export default function Interview1Flow({
         blob = new Blob([], { type: "audio/webm" });
       }
       void fromTimeout;
+
+      // A 0-byte blob is NEVER silence. A candidate who says nothing still
+      // produces a valid webm with container bytes; zero means the recorder
+      // handed back nothing, which is ours. Submitting it wrote
+      // "[No response detected]" into the transcript and burned the question
+      // — two real answers were lost that way before this guard existed.
+      if (!retryBlob && blob.size === 0) {
+        submittingTurnRef.current = false;
+        setRecState("idle");
+        micBlockedRef.current = true;
+        setMicBlocked(true);
+        setError(
+          "We didn't capture any audio — that's on our side, not yours. Reconnect your microphone below, then answer again. Your time is paused."
+        );
+        // A fresh window, frozen immediately by micBlocked: they should not
+        // pay for our recorder with the seconds they had left.
+        beginAnswerPhase(q);
+        return;
+      }
 
       const form = new FormData();
       form.append("token", token);
@@ -627,9 +691,27 @@ export default function Interview1Flow({
                   </div>
                 </div>
                 {error && (
-                  <p style={{ color: "var(--amber)", fontSize: "13px", textAlign: "center", marginTop: "12px" }}>
+                  <p style={{ color: "var(--amber)", fontSize: "13px", textAlign: "center", marginTop: "12px" }} role="alert">
                     {error}
                   </p>
+                )}
+                {micBlocked && (
+                  /* The message said "reconnect it to continue" and nothing on
+                     screen could. This re-acquires the stream, the same call
+                     the camera's own recovery uses. */
+                  <div style={{ textAlign: "center", marginTop: "10px" }}>
+                    <button
+                      type="button"
+                      className="state-action-btn"
+                      onClick={handleMicReconnect}
+                      disabled={micRetrying}
+                    >
+                      {micRetrying ? "Reconnecting…" : "Reconnect microphone"}
+                    </button>
+                    <p style={{ color: "rgba(251, 248, 242, 0.55)", fontSize: "12px", marginTop: "8px" }}>
+                      Your answer time is paused while this is on screen.
+                    </p>
+                  </div>
                 )}
               </div>
             )}

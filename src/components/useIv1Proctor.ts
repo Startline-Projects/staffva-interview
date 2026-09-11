@@ -202,29 +202,77 @@ export function useIv1Proctor(token: string) {
         ? "audio/webm;codecs=opus"
         : "audio/webm",
     });
+    let settle: ((b: Blob) => void) | null = null;
+    let settled = false;
+    const finish = () => {
+      if (settled || !settle) return;
+      settled = true;
+      answerRecordingRef.current = false;
+      releaseRetiredAudio();
+      settle(new Blob(chunks, { type: "audio/webm" }));
+    };
     rec.ondataavailable = (e) => {
       if (e.data && e.data.size > 0) chunks.push(e.data);
+      // The final chunk can arrive AFTER onstop. Resolving on onstop alone
+      // handed back a blob assembled before this ran — see below.
+      if (rec.state === "inactive") finish();
     };
-    rec.start();
+    // A TIMESLICE. rec.start() with no argument delivers every byte in a
+    // single dataavailable during stop(), so nothing is banked until the
+    // recorder is already closing; start(1000) accumulates a chunk a second
+    // while they speak. This is what the skills interview does, and that one
+    // has worked 54 times.
+    //
+    // WHAT IS PROVEN AND WHAT IS NOT. Proven in production: the first two
+    // answers ever recorded here were 0-byte objects in storage, Deepgram
+    // rejected them as "corrupt or unsupported data", and both turns were
+    // written to the transcript as "[No response detected]". NOT proven: that
+    // the missing timeslice is the cause. Chromium reproduces none of it —
+    // no-timeslice, shared-track and cloned-track all return ~40KB there — so
+    // the trigger is specific to the candidate's browser or device and is
+    // still unidentified. These two changes make the recorder behave like the
+    // one that works; the guards that actually protect the candidate are in
+    // Interview1Flow (a 0-byte blob is never submitted) and in the answer
+    // route (a failed transcription is never written as silence).
+    rec.start(1000);
     answerRecordingRef.current = true;
     return {
       stop: () =>
         new Promise<Blob>((resolve) => {
-          rec.onstop = () => {
-            answerRecordingRef.current = false;
-            releaseRetiredAudio();
-            resolve(new Blob(chunks, { type: "audio/webm" }));
-          };
+          settle = resolve;
+          // Backstop: whichever of the two arrives last wins, and if the
+          // final dataavailable never comes we still return what we have
+          // rather than hanging the answer.
+          rec.onstop = () => setTimeout(finish, 200);
           try {
             rec.stop();
           } catch {
-            answerRecordingRef.current = false;
-            releaseRetiredAudio();
-            resolve(new Blob(chunks, { type: "audio/webm" }));
+            finish();
           }
         }),
     };
   }, [releaseRetiredAudio]);
+
+  /**
+   * Why can't we record right now — or null when we can.
+   *
+   * recordAnswer() returns null for three different reasons and the UI was
+   * asserting one of them ("your microphone disconnected"), which is a guess
+   * and was sometimes simply false. Same defect as reporting a database
+   * outage as "candidate not found": name the real cause or say you don't
+   * know, never invent a specific one.
+   */
+  const micProblem = useCallback(
+    (): "no_stream" | "no_track" | "track_ended" | null => {
+      const stream = streamRef.current;
+      if (!stream) return "no_stream";
+      const audio = stream.getAudioTracks();
+      if (audio.length === 0) return "no_track";
+      if (!audio.some((t) => t.readyState === "live")) return "track_ended";
+      return null;
+    },
+    []
+  );
 
   const reconnectCamera = useCallback(async (): Promise<boolean> => {
     try {
@@ -307,6 +355,7 @@ export function useIv1Proctor(token: string) {
 
   return {
     acquire,
+    micProblem,
     hasTracks,
     isConsented,
     recordConsent,

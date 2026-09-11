@@ -160,8 +160,36 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Transcribe. An empty or failed transcription records the turn as
-    // unheard — the silence guard at scoring decides what that means.
+    // No audio at all is never an answer. A candidate who stays silent still
+    // sends a valid webm with container bytes; zero means the recorder gave
+    // us nothing, which is ours to fix, not theirs to be scored on.
+    if (buffer.byteLength === 0) {
+      await recordVendorFailure({
+        vendor: "deepgram",
+        operation: "iv1_empty_recording",
+        fatal: false,
+        error: new Error("answer blob was 0 bytes; not transcribed"),
+        // The cause is still unidentified and is browser- or device-specific,
+        // so record what would identify it next time rather than guessing again.
+        context: {
+          interview_id: interviewId,
+          question_id: questionId,
+          user_agent: request.headers.get("user-agent"),
+          content_type: audio.type || null,
+        },
+      });
+      return NextResponse.json(
+        { error: "We didn't receive any audio for that answer. Please record it again." },
+        { status: 422 }
+      );
+    }
+
+    // An EMPTY transcription is real silence and is recorded as such. A
+    // FAILED one is ours, and must never be written as silence — the skills
+    // interview already learned this ("do not fabricate a '[No response
+    // detected]' turn — that would burn the question and be scored as though
+    // the candidate said nothing"), and interview 1 was doing exactly that.
+    // It cost the first candidate through here two of five answers.
     let text = "[No response detected]";
     let confidence: number | null = null;
     try {
@@ -176,8 +204,14 @@ export async function POST(request: NextRequest) {
         operation: "iv1_transcribe",
         fatal: false,
         error: err,
-        context: { interview_id: interviewId },
+        context: { interview_id: interviewId, question_id: questionId },
       });
+      // 503, so the client's existing retry path holds the answer instead of
+      // advancing. The recording is already in storage either way.
+      return NextResponse.json(
+        { error: "We couldn't process that answer just now. Please try again." },
+        { status: 503 }
+      );
     }
 
     const now = new Date().toISOString();
