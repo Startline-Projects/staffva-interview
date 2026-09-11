@@ -126,6 +126,12 @@ export default function Interview1Flow({
   const [micRetrying, setMicRetrying] = useState(false);
   const submittingTurnRef = useRef(false);
   const failedBlobRef = useRef<Blob | null>(null);
+  /** Whether the held answer was rejected by the SERVER (transcription could
+   *  not read it) rather than lost in transit. Re-sending identical bytes to
+   *  a server that already refused them can never succeed, so that case needs
+   *  a re-record, not a retry. */
+  const [uploadRejected, setUploadRejected] = useState(false);
+  const lastStatusRef = useRef(0);
 
   useEffect(() => {
     turnRef.current = turn;
@@ -385,11 +391,17 @@ export default function Interview1Flow({
       submittingTurnRef.current = true;
       setRecState("saving");
       let blob: Blob;
+      // Did a recorder actually run for this turn? This is the difference
+      // between "our recorder produced nothing" and "they chose not to
+      // answer", and both arrive here as zero bytes.
+      let hadRecorder = false;
       if (retryBlob) {
         blob = retryBlob;
+        hadRecorder = true;
       } else if (recorderRef.current) {
         const rec = recorderRef.current;
         recorderRef.current = null;
+        hadRecorder = true;
         blob = await rec.stop();
       } else {
         blob = new Blob([], { type: "audio/webm" });
@@ -401,7 +413,7 @@ export default function Interview1Flow({
       // handed back nothing, which is ours. Submitting it wrote
       // "[No response detected]" into the transcript and burned the question
       // — two real answers were lost that way before this guard existed.
-      if (!retryBlob && blob.size === 0) {
+      if (hadRecorder && !retryBlob && blob.size === 0) {
         submittingTurnRef.current = false;
         setRecState("idle");
         micBlockedRef.current = true;
@@ -420,8 +432,13 @@ export default function Interview1Flow({
       form.append("interviewId", interviewId);
       form.append("questionId", q.id);
       form.append("audio", blob, "answer.webm");
+      // Tells the server which kind of empty this is. Without it, a candidate
+      // who simply declines to answer is refused by the server's own 0-byte
+      // guard and can never move past the question.
+      form.append("noRecording", hadRecorder ? "false" : "true");
 
       let ok = false;
+      lastStatusRef.current = 0;
       let data: {
         done?: boolean;
         question?: Turn | null;
@@ -432,6 +449,7 @@ export default function Interview1Flow({
       for (let i = 0; i < 3; i++) {
         try {
           const res = await fetch("/api/interview1/answer", { method: "POST", body: form });
+          lastStatusRef.current = res.status;
           data = await res.json().catch(() => ({}));
           if (res.ok) {
             ok = true;
@@ -457,6 +475,10 @@ export default function Interview1Flow({
         // losing answer time to our network failure.
         stopPhaseTimer();
         failedBlobRef.current = blob;
+        // 4xx/503 from the answer route means the SERVER looked at these
+        // bytes and refused them. Retrying the identical blob is guaranteed
+        // to fail again, so the overlay must offer a re-record instead.
+        setUploadRejected(lastStatusRef.current === 422 || lastStatusRef.current === 503);
         setUploadFailed(true);
         setRecState("idle");
         return;
@@ -528,6 +550,20 @@ export default function Interview1Flow({
     setBusy(false);
     // If it failed again the overlay stays up (submitTurn re-held the blob);
     // a success advanced the turn, which restarts the clock in the effect.
+  }
+
+  /** Discard the held answer and let them say it again. The only escape when
+   *  the server has refused these bytes — "Retry saving" re-sends the same
+   *  blob and would loop forever. */
+  function reRecordFailedAnswer() {
+    const q = turnRef.current;
+    if (!q) return;
+    failedBlobRef.current = null;
+    setUploadFailed(false);
+    setUploadRejected(false);
+    setError("");
+    setRecState("idle");
+    beginAnswerPhase(q);
   }
 
   // ═══ Closing → score → post ═══
@@ -735,12 +771,35 @@ export default function Interview1Flow({
               <div className="test-paused-overlay">
                 <div className="test-paused-card">
                   <h2>That answer didn&apos;t save</h2>
-                  <p>
-                    Your connection hiccuped — your recording is still held in this tab. Retry now;
-                    nothing needs re-recording.
-                  </p>
-                  <button type="button" className="state-action-btn" disabled={busy} onClick={retryFailedUpload}>
-                    {busy ? "Saving…" : "Retry saving"}
+                  {/* Two different failures, and telling them apart matters:
+                      re-sending bytes the server has already refused can never
+                      succeed, so claiming "nothing needs re-recording" there
+                      would leave the candidate pressing a button that cannot
+                      work. */}
+                  {uploadRejected ? (
+                    <p>
+                      We couldn&apos;t read that recording — that&apos;s on our side, not yours.
+                      Saying it again is the quickest way through. Your time is paused.
+                    </p>
+                  ) : (
+                    <p>
+                      Your connection hiccuped — your recording is still held in this tab. Retry now;
+                      nothing needs re-recording.
+                    </p>
+                  )}
+                  {!uploadRejected && (
+                    <button type="button" className="state-action-btn" disabled={busy} onClick={retryFailedUpload}>
+                      {busy ? "Saving…" : "Retry saving"}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="state-action-btn"
+                    disabled={busy}
+                    onClick={reRecordFailedAnswer}
+                    style={uploadRejected ? undefined : { marginTop: "10px", opacity: 0.85 }}
+                  >
+                    Record this answer again
                   </button>
                 </div>
               </div>

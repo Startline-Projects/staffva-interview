@@ -163,7 +163,13 @@ export async function POST(request: NextRequest) {
     // No audio at all is never an answer. A candidate who stays silent still
     // sends a valid webm with container bytes; zero means the recorder gave
     // us nothing, which is ours to fix, not theirs to be scored on.
-    if (buffer.byteLength === 0) {
+    // Zero bytes has two meanings and they must not be merged. If no recorder
+    // ran, the candidate let the clock expire without answering — a real
+    // non-answer, and the interview should move on. If one DID run and still
+    // produced nothing, that is our recorder failing and must never be
+    // written into their transcript as silence.
+    const noRecording = formData.get("noRecording") === "true";
+    if (buffer.byteLength === 0 && !noRecording) {
       await recordVendorFailure({
         vendor: "deepgram",
         operation: "iv1_empty_recording",
@@ -192,7 +198,12 @@ export async function POST(request: NextRequest) {
     // It cost the first candidate through here two of five answers.
     let text = "[No response detected]";
     let confidence: number | null = null;
-    try {
+    // Nothing was recorded and the candidate knows it — the clock ran out
+    // without them starting. That is the one case where "[No response
+    // detected]" is the honest answer, and sending an empty buffer to
+    // Deepgram would only earn a 400 and a retry loop they cannot escape.
+    const declinedToAnswer = buffer.byteLength === 0;
+    if (!declinedToAnswer) try {
       const result = await transcribeAudio(buffer);
       if (result.text.trim()) {
         text = result.text.trim().slice(0, 5000);
