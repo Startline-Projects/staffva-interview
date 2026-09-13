@@ -412,7 +412,11 @@ async function performScoring(
       // through admin_status instead of permanently_blocked. Only demote from
       // the pre-live statuses; an approved candidate keeps their listing and
       // simply doesn't earn the Vetted badge.
-      ...(passed || candidate?.admin_status === "approved"
+      // Both labels mean live (admin_status is being renamed approved -> live
+      // on the platform). Matching only "approved" here would demote a LIVE
+      // candidate to ai_interview_failed for failing an optional interview —
+      // exactly what this branch exists to prevent.
+      ...(passed || candidate?.admin_status === "approved" || candidate?.admin_status === "live"
         ? {}
         : { admin_status: "ai_interview_failed" }),
       ai_interview_retake_notified_at: null,
